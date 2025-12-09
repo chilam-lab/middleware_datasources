@@ -1,0 +1,3 @@
+# Contexto del proyecto
+Este repositorio forma parte de la plataforma SPECIES desarrollada por la CONABIO y el C3 de la UNAM.
+Su función es enlazar las diferetnes fuentes de datos que se tiene acceso bajo un estadar definido de capa de servicios que hace factible su combinación. Este middleware sirve la información que es usada por la nueva versión del frontend de SPECIES en tecnología Angular, pero además puede ser usado por otros proyectos.
