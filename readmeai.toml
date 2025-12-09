@@ -1,3 +1,10 @@
+[settings]
+language = "es"  
+tree_max_depth = 1
+model = "gpt-4o"
+api = "openai"
+temperature = 0.2
+
 [repository]
 ignore = [
     "node_modules",
@@ -9,8 +16,3 @@ ignore = [
     "env"
 ]
 
-[settings]
-tree_max_depth = 1
-model = "gpt-4o"
-api = "openai"
-temperature = 0.2
