@@ -1,7 +1,7 @@
 
-# Proyecto SRC — Documentación Completa
+# Proyecto middleware_datasources
 
-> Impulsa decisiones informadas con datos precisos mediante una API modular para la consulta, procesamiento y análisis de datos provenientes de múltiples fuentes.
+> Impulsa decisiones informadas con datos precisos mediante una API modular para la consulta, procesamiento y análisis de datos provenientes de múltiples fuentes bajo el estandar definido en el proyecto [species_v3.0](https://github.com/chilam-lab/species_v3.0)
 
 ---
 
