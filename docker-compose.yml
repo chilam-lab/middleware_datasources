@@ -1,0 +1,11 @@
+version: '2'
+services:
+  auth_backend:
+    build: ./app
+    ports:
+      - "8686:8080"
+    #env_file:
+    #  - ./db-config.env
+    restart: unless-stopped
+    #volumes:
+    #  - ./app/code/node_modules
