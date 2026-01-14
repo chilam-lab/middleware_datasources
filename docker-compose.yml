@@ -24,3 +24,17 @@ services:
       ZACATUCHE_HOST: ${ZACATUCHE_HOST}
       MANATI_HOST: ${MANATI_HOST}
       SPECIES_HOST: ${SPECIES_HOST}
+
+      # Redis (clave)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis_middlewaredatasources
+    restart: unless-stopped
+
