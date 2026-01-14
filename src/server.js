@@ -14,8 +14,7 @@ process.env.TZ = "America/Mexico_City";
 var verb_utils = require('./Utils/verb_utils')
 // var pool = verb_utils.pool 
 
-var port = config.port   // set our port
-// var port = 8086   // set our port
+var port = config.port || 8080;
 var app = express()
 
 //app.use(express.static('public'));

@@ -1,11 +1,26 @@
-version: '2'
+version: '3.8'
+
 services:
-  auth_backend:
-    build: ./app
+  middleware-datasources:
+    container_name: middlewaredatasources
+    build:
+      context: ./
+      dockerfile: Dockerfile
     ports:
-      - "8686:8080"
-    #env_file:
-    #  - ./db-config.env
+      - "8383:8080"
     restart: unless-stopped
-    #volumes:
-    #  - ./app/code/node_modules
+    environment:
+      # Puerto interno donde escucha Node
+      PORT: ${PORT:-8080}
+
+      # Otros 
+      EUSER: ${EUSER}
+      EPASS: ${EPASS}
+      EHOST: ${EHOST}
+      EPORT: ${EPORT}
+      SEED: ${SEED}
+      TIME_TOKEN: ${TIME_TOKEN}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      ZACATUCHE_HOST: ${ZACATUCHE_HOST}
+      MANATI_HOST: ${MANATI_HOST}
+      SPECIES_HOST: ${SPECIES_HOST}

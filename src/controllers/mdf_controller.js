@@ -10,36 +10,38 @@ const d3 = require('d3')
 const redis_client = require('../Utils/redisClient');
 var verb_utils = require('../Utils/verb_utils')
 
+console.log("*** host: " + config.server_species.host)
+
 // TODO: Esto se reemplazará por un catologo en base de datos de las fuentes de datos disponibles
 const sourcesDict = {
 	1: { 
 	  	id_source: 1, 
 	  	nombre: 'SNIB', 
-	  	url_catvar: 'http://localhost:8086/spv3/variables', 
-	  	url_secuencia: 'http://localhost:8086/spv3/secuencia', 
-	  	url_variables: 'http://localhost:8086/spv3/variables/7', 
-	  	url_data: 'http://localhost:8086/spv3/get-data/7' 
+	  	url_catvar: 'https://' + config.server_species.host + '/spv3/variables', 
+	  	url_secuencia: 'https://' + config.server_species.host + '/spv3/secuencia', 
+	  	url_variables: 'https://' + config.server_species.host + '/spv3/variables/7', 
+	  	url_data: 'https://' + config.server_species.host + '/spv3/get-data/7' 
 	 },
 	2: { 
 	  	id_source: 2, 
 	  	nombre: 'WorldClim', 
-	  	url_catvar: 'http://localhost:8088/wc/variables', 
-	  	url_secuencia: 'http://localhost:8086/wc/secuencia', 
-	  	url_variables: 'http://localhost:8088/wc/variables/1', 
-	  	url_data: 'http://localhost:8088/wc/get-data/3' 
+	  	url_catvar:'https://' + config.server_species.host + '/wc/variables', 
+	  	url_secuencia: 'https://' + config.server_species.host + '/wc/secuencia', 
+	  	url_variables: 'https://' + config.server_species.host + '/wc/variables/1', 
+	  	url_data: 'https://' + config.server_species.host + '/wc/get-data/3' 
 	 },
 	 3: { 
 	  	id_source: 3, 
 	  	nombre: 'GBIF', 
-	  	url_catvar: 'http://localhost:8086/gbif1/variables', 
-	  	url_secuencia: 'http://localhost:8086/gbif1/secuencia', 
-	  	url_variables: 'http://localhost:8089/gbif1/variables/7', 
-	  	url_data: 'http://localhost:8089/gbif1/get-data/7' 
+	  	url_catvar: 'https://' + config.server_species.host + '/gbif1/variables', 
+	  	url_secuencia: 'https://' + config.server_species.host + '/gbif1/secuencia', 
+	  	url_variables: 'https://' + config.server_species.host + '/gbif1/variables/7', 
+	  	url_data: 'https://' + config.server_species.host + '/gbif1/get-data/7' 
 	 }
 };
 
-const url_gridid = "http://localhost:8085/regions/region-cells/"
-const url_geojson = "http://localhost:8085/regions/region-grids/"
+const url_gridid = 'https://' + config.server_species.host + "/regions/region-cells/"
+const url_geojson = 'https://' + config.server_species.host + "/regions/region-grids/"
 
 exports.get_sources = async function(req, res) {
 
