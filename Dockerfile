@@ -1,4 +1,4 @@
-FROM node:13.11.0-stretch
+FROM node:22.16.0-bookworm-slim
 
 WORKDIR /usr/src/app
 
