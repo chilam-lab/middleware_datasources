@@ -17,31 +17,31 @@ const sourcesDict = {
 	1: { 
 	  	id_source: 1, 
 	  	nombre: 'SNIB', 
-	  	url_catvar: 'https://' + config.server_species.host + '/spv3/variables', 
-	  	url_secuencia: 'https://' + config.server_species.host + '/spv3/secuencia', 
-	  	url_variables: 'https://' + config.server_species.host + '/spv3/variables/7', 
-	  	url_data: 'https://' + config.server_species.host + '/spv3/get-data/7' 
+	  	url_catvar: config.server_snib.host + '/spv3/variables', 
+	  	url_secuencia: config.server_snib.host + '/spv3/secuencia', 
+	  	url_variables: config.server_snib.host + '/spv3/variables/7', 
+	  	url_data: config.server_snib.host + '/spv3/get-data/7' 
 	 },
 	2: { 
 	  	id_source: 2, 
 	  	nombre: 'WorldClim', 
-	  	url_catvar:'https://' + config.server_species.host + '/wc/variables', 
-	  	url_secuencia: 'https://' + config.server_species.host + '/wc/secuencia', 
-	  	url_variables: 'https://' + config.server_species.host + '/wc/variables/1', 
-	  	url_data: 'https://' + config.server_species.host + '/wc/get-data/3' 
+	  	url_catvar: config.server_worldclim.host + '/wc/variables', 
+	  	url_secuencia: config.server_worldclim.host + '/wc/secuencia', 
+	  	url_variables: config.server_worldclim.host + '/wc/variables/1', 
+	  	url_data: config.server_worldclim.host + '/wc/get-data/3' 
 	 },
 	 3: { 
 	  	id_source: 3, 
 	  	nombre: 'GBIF', 
-	  	url_catvar: 'https://' + config.server_species.host + '/gbif1/variables', 
-	  	url_secuencia: 'https://' + config.server_species.host + '/gbif1/secuencia', 
-	  	url_variables: 'https://' + config.server_species.host + '/gbif1/variables/7', 
-	  	url_data: 'https://' + config.server_species.host + '/gbif1/get-data/7' 
+	  	url_catvar: config.server_gbif.host + '/gbif1/variables', 
+	  	url_secuencia: config.server_gbif.host + '/gbif1/secuencia', 
+	  	url_variables: config.server_gbif.host + '/gbif1/variables/7', 
+	  	url_data: config.server_gbif.host + '/gbif1/get-data/7' 
 	 }
 };
 
-const url_gridid = 'https://' + config.server_species.host + "/regions/region-cells/"
-const url_geojson = 'https://' + config.server_species.host + "/regions/region-grids/"
+const url_gridid = config.server_regions.host + "/regions/region-cells/"
+const url_geojson = config.server_regions.host + "/regions/region-grids/"
 
 exports.get_sources = async function(req, res) {
 
@@ -315,7 +315,7 @@ exports.getOccOnMap = async function(req, res) {
     const limit  = 1000;
     const offset = 0;
 
-    console.log(array_splist)
+    // console.log(array_splist)
 
     // Para cada item del array, construimos q y pedimos level_id
     const levelIdArrays = await Promise.all(
@@ -327,13 +327,15 @@ exports.getOccOnMap = async function(req, res) {
         // Limpieza mínima del valor (si lleva espacios => comillas)
         const nivel = String(item.nivel || '').trim();
         const valorRaw = String(item.valor || '').trim();
-        const valor = /\s/.test(valorRaw) ? `"${valorRaw}"` : valorRaw;
+        const valor = /\s/.test(valorRaw) ? `${valorRaw}` : valorRaw;
         const q = `${nivel} = ${valor}`;
 
-        // console.log("q: + " + q);
+        // console.log("q: " + q);
 
         const bodyQuery = { q, offset, limit };
         const resp = await axios.post(urlQuery, bodyQuery, axiosCfg);
+
+        // console.log(resp.data);
 
         // resp.data.data = array de objetos que traen level_id: number[]
         const rows = resp.data?.data || [];
@@ -352,7 +354,7 @@ exports.getOccOnMap = async function(req, res) {
     );
 
     // console.log("En espera de consumo del servicio");
-    console.log(levelIdArrays);
+    // console.log(levelIdArrays);
 
     // Unificar y deduplicar level_id
     const levelsSet = new Set();
@@ -368,7 +370,7 @@ exports.getOccOnMap = async function(req, res) {
       return res.status(200).json({ data: [] });
     }
 
-    console.log(levels_id);
+    // console.log(levels_id);
 
     // ====================================================
     // PASO 2: obtener cells por los level_id (en un batch)

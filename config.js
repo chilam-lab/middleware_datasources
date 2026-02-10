@@ -33,6 +33,19 @@ const config = {
     password: process.env.PASSSPECIES, //password to authenticate
     // privateKey: fs.readFileSync(process.env.PRIVATEKEYZACATUCHE), //private key to authenticate
   },
+  // configuracion de urls para manejo en local
+  server_regions: {
+    host: process.env.REGIONS_HOST
+  },
+  server_snib: {
+    host: process.env.SNIB_HOST
+  },
+  server_worldclim: {
+    host: process.env.WORLDCLIM_HOST
+  },
+  server_gbif: {
+    host: process.env.GBIF_HOST
+  },
   SEED: process.env.SEED,
   TIME_TOKEN: process.env.TIME_TOKEN,
   SENDGRID_API_KEY: process.env.SENDGRID_API_KEY,
