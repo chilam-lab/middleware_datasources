@@ -10,7 +10,8 @@ const d3 = require('d3')
 const redis_client = require('../Utils/redisClient');
 var verb_utils = require('../Utils/verb_utils')
 
-console.log("*** host: " + config.server_species.host)
+console.log("*** host species: " + config.server_species.host)
+console.log("*** host snib: " + config.server_snib.host)
 
 // TODO: Esto se reemplazará por un catologo en base de datos de las fuentes de datos disponibles
 const sourcesDict = {
