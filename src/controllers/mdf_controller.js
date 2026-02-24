@@ -211,6 +211,7 @@ exports.getTaxonChildren = async function(req, res) {
 	console.log("parentLevel: " + parentLevel)
 	console.log("parentValue: " + parentValue)
 	console.log("childLevel: " + childLevel)
+	console.log("source_id: " + source_id)
 
 	let url = fuente.url_secuencia
 	console.log("url: + " + url)
@@ -475,7 +476,7 @@ exports.getCatArea = async function(req, res) {
 	    };
 
 		const url = url_geojson
-		// console.log("url: " + url)
+		console.log("url: " + url)
 
 		const jsonData = await axios.get(url, config);
 		// console.log(jsonData.data.data)
