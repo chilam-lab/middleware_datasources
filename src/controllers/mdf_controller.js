@@ -21,15 +21,24 @@ const sourcesDict = {
 	  	url_catvar: config.server_snib.host + '/spv3/variables', 
 	  	url_secuencia: config.server_snib.host + '/spv3/secuencia', 
 	  	url_variables: config.server_snib.host + '/spv3/variables/7', 
-	  	url_data: config.server_snib.host + '/spv3/get-data/7' 
+	  	url_data: config.server_snib.host + '/spv3/get-data/7',
+	  	path: [{
+	  		variable_id: 1, variable: "reino", db: "reinovalido",
+	  		variable_id: 2, variable: "phylum", db: "phylumdivisionvalido",
+	  		variable_id: 3, variable: "clase", db: "clasevalida",
+	  		variable_id: 4, variable: "orden", db: "ordenvalido",
+	  		variable_id: 5, variable: "familia", db: "familiavalida",
+	  		variable_id: 6, variable: "genero", db: "generovalido",
+	  		variable_id: 7, variable: "especie", db: "especievalidabusqueda"
+	  	}]
 	 },
 	2: { 
 	  	id_source: 2, 
 	  	nombre: 'WorldClim', 
 	  	url_catvar: config.server_worldclim.host + '/wc/variables', 
 	  	url_secuencia: config.server_worldclim.host + '/wc/secuencia', 
-	  	url_variables: config.server_worldclim.host + '/wc/variables/1', 
-	  	url_data: config.server_worldclim.host + '/wc/get-data/3' 
+	  	url_variables: config.server_worldclim.host + '/wc/variables/3', 
+	  	url_data: config.server_worldclim.host + '/wc/get-data/1' 
 	 },
 	 3: { 
 	  	id_source: 3, 
@@ -173,6 +182,8 @@ exports.getTaxonFromString = async function(req, res) {
 			limit: 10
 	}
 
+	console.log(body)
+
 	try {
 
     	const response = await axios.post(url, body, config);
@@ -235,24 +246,34 @@ exports.getTaxonChildren = async function(req, res) {
     	const response = await axios.post(url, body, config);
     	console.log(response.data.data)
 
-    	raw = response.data.data
+    	const raw = response.data.data
 
-    	const items = (raw || []).map((row, i) => {
-			  // toma la PRIMERA llave y su valor (o usa el childLevel como en el ejemplo previo)
-			  const key = Object.keys(row)[0];               // p.ej. "generovalido"
-			  const val = (row[key] ?? '').toString().trim();// p.ej. "Canis"
+    	const items = (raw || []).map((row) => {
+        const key = Object.keys(row)[0];
+        const val = (row[key] ?? '').toString().trim();
 
-				console.log(key)
-				console.log(val)
-			  console.log(row)
+        // Caso WorldClim (source_id=2)
+        if (Number(source_id) === 2) {
+          const code = (row.layer ?? '').toString().trim();          // bio001
+          const human = (row.label ?? '').toString().trim();         // Annual Mean Temperature
+          const display = (code && human) ? `${code} - ${human}` : (code || human || val);
+
+          return {
+            value: code || val,    // bio001
+            label: display,        // bio001 - Annual Mean Temperature
+            meta: { sourceKey: key, ...row }
+          };
+        }
+
+        // Resto de fuentes (comportamiento actual)
+        return {
+          value: (row.label ?? '').toString().trim() || val,
+          label: val,
+          meta: { sourceKey: key, ...row }
+        };
+      });
 
 
-			  return {
-			    value: row.label,               // <- el valor real del taxón
-			    label: val,               // <- lo que se muestra en UI
-			    meta: { sourceKey: key, ...row }
-			  };
-			});
 
 
 			return res.status(200).json(items);
@@ -625,12 +646,26 @@ exports.get_EpsScrRelation = async function(req, res) {
   const target_body = verb_utils.getParam(req, 'target', {});
   const covars_body = verb_utils.getParam(req, 'covars', {});
 
+  debug("grid_id: " + grid_id);
+  debug("min_occ: " + min_occ);
+  debug(target_body);
+  debug(covars_body);
+
+
+
   try {
     const n                 = await getGridLength(grid_id);   // #celdas del grid
     const target_ids_array  = await getSourceIds(target_body);
     const covars_ids_array  = await getSourceIds(covars_body);
     const targetCells_data  = await getDataInterccion(target_ids_array, grid_id);
     const covarsCells_data  = await getDataInterccion(covars_ids_array, grid_id);
+
+    debug("n: " + n);
+    // debug(target_ids_array);
+    debug(covars_ids_array);
+    // debug(targetCells_data);
+    debug(covarsCells_data);
+
 
     const resultados = [];
     const acumuladosPorCelda = Object.create(null);
@@ -652,16 +687,25 @@ exports.get_EpsScrRelation = async function(req, res) {
       return out; // array de celdas únicas en la intersección
     };
 
+    // console.log(targetCells_data)
+
     for (const obj1 of targetCells_data) {
       for (const item1 of obj1.data) {
+
+      	// console.log(item1)
 
         // Celdas únicas para el target
         const targetCellsSet = toSet(item1.cells);
         const id_target = item1.level_id;
         const ni_unique = targetCellsSet.size; // # de celdas donde aparece el target
 
+        // console.log(covarsCells_data)
+
         for (const obj2 of covarsCells_data) {
           for (const item2 of obj2.data) {
+
+          	// console.log(item2)
+
             const id_covars = item2.level_id;
 
             // misma variable → saltar
@@ -674,6 +718,9 @@ exports.get_EpsScrRelation = async function(req, res) {
             // Intersección por CELDAS ÚNICAS (coocurrencias por celda, no por ocurrencia)
             const interCells = intersectSets(targetCellsSet, covarCellsSet);
             const nij_unique = interCells.length;
+
+            console.log(interCells)
+            console.log("nij_unique: " + nij_unique)
 
             // Regla: solo si hay al menos min_occ celdas en común
             if (nij_unique < min_occ) continue;
@@ -1029,6 +1076,8 @@ exports.get_EpsScr_bycell = async function(req, res) {
 
 async function getSourceIds(body_request){
 
+	debug("getSourceIds")
+
 	let source_ids_array = []
 	const config = {
 	        headers: {
@@ -1049,6 +1098,8 @@ async function getSourceIds(body_request){
     			offset: item.offset, 
     			limit: item.limit
 			}
+
+			debug(body)
 
     	try {
 
@@ -1089,6 +1140,8 @@ async function getSourceIds(body_request){
 
 async function getDataInterccion(ids_array, grid_id){
 
+	debug("getDataInterccion")
+
 	const config = {
 	        headers: {
 	            'Content-Type': 'application/json',
@@ -1109,6 +1162,8 @@ async function getDataInterccion(ids_array, grid_id){
 		    filter_names:[],
     		filter_values:[]
 	    };
+
+	    debug(body)
 
 		try {
 
@@ -1134,6 +1189,10 @@ async function getDataInterccion(ids_array, grid_id){
 
 async function getGridLength(grid_id){
 
+  console.log("getGridLength")
+  
+  console.log("grid_id: " + grid_id)
+
 	const config = {
 	        headers: {
 	            'Content-Type': 'application/json',
@@ -1148,7 +1207,7 @@ async function getGridLength(grid_id){
 		const response = await axios.get(url, config);
 
       	grid_length = response.data.n
-      	// console.log("grid_length: " + grid_length)
+      	console.log("grid_length: " + grid_length)
       			      
     } 
     catch (error) {
@@ -1158,4 +1217,3 @@ async function getGridLength(grid_id){
 	return grid_length       
 
 }
-
