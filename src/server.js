@@ -45,15 +45,22 @@ app.use(session({
 var mdfrouter = require('./routes/mdfrouter')
 app.use('/mdf', mdfrouter)
 
+var mdfCtrl = require('./controllers/mdf_controller')
 
-// Start the server
-var server = app.listen(port, function () {
-  var port = server.address().port
-  console.log('Aplicación corriendo en el puerto %s', port)
-})
-
-server.setTimeout(60 * 1000 * 15)
-module.exports = server
+// Load data sources from DB before starting the server
+mdfCtrl.loadSourcesDict()
+  .then(() => {
+    var server = app.listen(port, function () {
+      var port = server.address().port
+      console.log('Aplicación corriendo en el puerto %s', port)
+    })
+    server.setTimeout(60 * 1000 * 15)
+    module.exports = server
+  })
+  .catch((err) => {
+    console.error('❌ Error fatal cargando fuentes de datos:', err.message)
+    process.exit(1)
+  })
 
 
 

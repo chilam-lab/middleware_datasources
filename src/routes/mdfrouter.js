@@ -20,6 +20,9 @@ router.route('/sources')
   .get(mdfCtrl.get_sources)
   .post(mdfCtrl.get_sources)
 
+router.route('/reload-sources')
+  .post(mdfCtrl.reload_sources)
+
 
 router.route('/getVariables')
   .get(mdfCtrl.get_variables)

@@ -46,6 +46,16 @@ const config = {
   server_gbif: {
     host: process.env.GBIF_HOST
   },
+  server_dem: {
+    host: process.env.DEM_HOST
+  },
+  mesh_db: {
+    host:     process.env.MESH_DB_HOST,
+    port:     process.env.MESH_DB_PORT,
+    database: process.env.MESH_DB_NAME,
+    user:     process.env.MESH_DB_USER,
+    password: process.env.MESH_DB_PWD
+  },
   SEED: process.env.SEED,
   TIME_TOKEN: process.env.TIME_TOKEN,
   SENDGRID_API_KEY: process.env.SENDGRID_API_KEY,

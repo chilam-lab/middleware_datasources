@@ -1,54 +1,41 @@
 var debug = require('debug')('verbs:controller')
-// var pgp = require('pg-promise')()
 var config = require('../../config')
 const axios = require("axios");
-const redis = require('redis');
 const { v4: uuidv4 } = require('uuid');
 const crossfilter = require('crossfilter')
 const d3 = require('d3')
 
 const redis_client = require('../Utils/redisClient');
 var verb_utils = require('../Utils/verb_utils')
+const db = require('../Utils/db');
 
 console.log("*** host species: " + config.server_species.host)
 console.log("*** host snib: " + config.server_snib.host)
 
-// TODO: Esto se reemplazará por un catologo en base de datos de las fuentes de datos disponibles
-const sourcesDict = {
-	1: { 
-	  	id_source: 1, 
-	  	nombre: 'SNIB', 
-	  	url_catvar: config.server_snib.host + '/spv3/variables', 
-	  	url_secuencia: config.server_snib.host + '/spv3/secuencia', 
-	  	url_variables: config.server_snib.host + '/spv3/variables/7', 
-	  	url_data: config.server_snib.host + '/spv3/get-data/7',
-	  	path: [{
-	  		variable_id: 1, variable: "reino", db: "reinovalido",
-	  		variable_id: 2, variable: "phylum", db: "phylumdivisionvalido",
-	  		variable_id: 3, variable: "clase", db: "clasevalida",
-	  		variable_id: 4, variable: "orden", db: "ordenvalido",
-	  		variable_id: 5, variable: "familia", db: "familiavalida",
-	  		variable_id: 6, variable: "genero", db: "generovalido",
-	  		variable_id: 7, variable: "especie", db: "especievalidabusqueda"
-	  	}]
-	 },
-	2: { 
-	  	id_source: 2, 
-	  	nombre: 'WorldClim', 
-	  	url_catvar: config.server_worldclim.host + '/wc/variables', 
-	  	url_secuencia: config.server_worldclim.host + '/wc/secuencia', 
-	  	url_variables: config.server_worldclim.host + '/wc/variables/3', 
-	  	url_data: config.server_worldclim.host + '/wc/get-data/1' 
-	 },
-	 3: { 
-	  	id_source: 3, 
-	  	nombre: 'GBIF', 
-	  	url_catvar: config.server_gbif.host + '/gbif1/variables', 
-	  	url_secuencia: config.server_gbif.host + '/gbif1/secuencia', 
-	  	url_variables: config.server_gbif.host + '/gbif1/variables/7', 
-	  	url_data: config.server_gbif.host + '/gbif1/get-data/7' 
-	 }
-};
+let sourcesDict = {};
+
+async function loadSourcesDict() {
+  const rows = await db.any(
+    'SELECT * FROM mdf_data_sources WHERE activo = TRUE ORDER BY id_source'
+  );
+  const newDict = {};
+  for (const row of rows) {
+    const host = (config[row.host_env_key] || {}).host || '';
+    newDict[row.id_source] = {
+      id_source:     row.id_source,
+      nombre:        row.nombre,
+      url_catvar:    host + row.path_catvar,
+      url_secuencia: host + row.path_secuencia,
+      url_variables: host + row.path_variables,
+      url_data:      host + row.path_data,
+      query_limit:   row.query_limit || 1000
+    };
+  }
+  sourcesDict = newDict;
+  console.log(`✅ sourcesDict cargado: ${Object.keys(sourcesDict).length} fuentes`);
+}
+
+exports.loadSourcesDict = loadSourcesDict;
 
 const url_gridid = config.server_regions.host + "/regions/region-cells/"
 const url_geojson = config.server_regions.host + "/regions/region-grids/"
@@ -66,6 +53,17 @@ exports.get_sources = async function(req, res) {
 		response: fuentes
 	})
 
+}
+
+
+exports.reload_sources = async function(_req, res) {
+	try {
+		await loadSourcesDict();
+		res.status(200).json({ message: 'sourcesDict recargado', count: Object.keys(sourcesDict).length });
+	} catch (error) {
+		console.error('❌ Error recargando sourcesDict:', error.message);
+		res.status(500).json({ error: 'Error al recargar fuentes de datos' });
+	}
 }
 
 
@@ -219,25 +217,48 @@ exports.getTaxonChildren = async function(req, res) {
 	let source_id = verb_utils.getParam(req, 'source_id', 1)
 	let fuente = sourcesDict[source_id];
 
-	console.log("parentLevel: " + parentLevel)
+	console.log("parentLev    el: " + parentLevel)
 	console.log("parentValue: " + parentValue)
 	console.log("childLevel: " + childLevel)
 	console.log("source_id: " + source_id)
 
 	let url = fuente.url_secuencia
 	console.log("url: + " + url)
-	
-	
+
+
 	const config = {
       headers: {
           'Content-Type': 'application/json',
       }
   };
 
+	// Caso DEM (source_id=4): no tiene jerarquía taxonómica.
+	// Retorna los bins de la variable de elevación directamente.
+	if (Number(source_id) === 4) {
+		try {
+			const response = await axios.post(fuente.url_variables, { q: '', offset: 0, limit: 500 }, config);
+			const raw = response.data?.data || [];
+			const items = raw.map((row) => {
+				const d = row.datos || {};
+				const rangeLabel = (d.min_value != null && d.max_value != null)
+					? `${d.min_value} - ${d.max_value} m`
+					: (d.tag || String(row.level_id));
+				return {
+					value: String(row.level_id),
+					label: rangeLabel,
+					meta: { sourceKey: 'level_id', ...row }
+				};
+			});
+			return res.status(200).json(items);
+		} catch (error) {
+			console.error(`❌ Error enviando a ${fuente.url_variables}:`, error.message);
+			return res.status(404).json({ error: 'Error al llamar el servicio DEM' });
+		}
+	}
 
   let body = {
-			variableLevel: parentLevel, 
-			variableValue: parentValue, 
+			variableLevel: parentLevel,
+			variableValue: parentValue,
 			nextVariableLevel: childLevel
 	}
 
@@ -335,7 +356,7 @@ exports.getOccOnMap = async function(req, res) {
     // =========================
     // PASO 1: obtener level_id
     // =========================
-    const limit  = 1000;
+    const limit  = fuente.query_limit || 1000;
     const offset = 0;
 
     // console.log(array_splist)
@@ -360,12 +381,14 @@ exports.getOccOnMap = async function(req, res) {
 
         // console.log(resp.data);
 
-        // resp.data.data = array de objetos que traen level_id: number[]
+        // resp.data.data = array de objetos que traen level_id: number[] o number
         const rows = resp.data?.data || [];
         const collected = [];
 
         for (const row of rows) {
-          const ids = Array.isArray(row.level_id) ? row.level_id : [];
+          const ids = Array.isArray(row.level_id)
+            ? row.level_id
+            : (row.level_id != null ? [row.level_id] : []);
           for (const id of ids) {
             if (id != null) collected.push(Number(id));
           }
@@ -934,11 +957,16 @@ exports.get_freq_byrange = async function(req, res) {
 
 	debug("get_freq_byrange")
 
-	let uuid = verb_utils.getParam(req, 'uuid')
-
-	let num_buckets = verb_utils.getParam(req, 'num_buckets', 20)
+	let uuid = verb_utils.getParam(req, 'uuid', null)
+	let num_buckets = parseInt(verb_utils.getParam(req, 'num_buckets', 20), 10)
 	
 	try {
+		if (!uuid) {
+			return res.status(400).json({ error: 'uuid requerido' });
+		}
+		if (Number.isNaN(num_buckets) || num_buckets < 1) {
+			num_buckets = 20;
+		}
 
 		const data = await redis_client.get(uuid + "_EpsScrpRel");
   	if (!data) {
@@ -996,7 +1024,10 @@ exports.get_freq_byrange = async function(req, res) {
 
 	} 
 	catch (error) {
-	    console.error('Error en la petición:', error.response ? error.response.data : error.message);
+	    console.error('Error en la petición get_freq_byrange:', error && error.response ? error.response.data : error.message);
+	    if (!res.headersSent) {
+	    	return res.status(500).json({ error: 'get_freq_byrange failed' });
+	    }
 	}
 	
   	
