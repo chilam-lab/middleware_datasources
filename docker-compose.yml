@@ -29,6 +29,14 @@ services:
       SNIB_HOST: ${SNIB_HOST}
       WORLDCLIM_HOST: ${WORLDCLIM_HOST}
       GBIF_HOST: ${GBIF_HOST}
+      DEM_HOST: ${DEM_HOST}
+
+      # Base de datos malla/regiones
+      MESH_DB_HOST: ${MESH_DB_HOST}
+      MESH_DB_PORT: ${MESH_DB_PORT}
+      MESH_DB_NAME: ${MESH_DB_NAME}
+      MESH_DB_USER: ${MESH_DB_USER}
+      MESH_DB_PWD: ${MESH_DB_PWD}
 
       # Redis (clave)
       REDIS_HOST: redis
