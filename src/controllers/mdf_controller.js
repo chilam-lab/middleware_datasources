@@ -188,20 +188,25 @@ exports.getTaxonFromString = async function(req, res) {
     	// console.log(response.data)
 
     	res.status(200).json({
-				data: response.data.data
+				data: response.data.data ?? []
 			})
 
-    			      
-  } 
+
+  }
   catch (error) {
+    	// Upstream 404 means "no results found" — return empty array instead of error
+    	if (error.response && error.response.status === 404) {
+    		return res.status(200).json({ data: [] });
+    	}
+
     	console.error(`❌ Error enviando a ${fuente.url_catvar}:`, error.message);
 
-    	return res.status(404).json({ 
-	  		error: 'Error la llamar el servicio' 
+    	return res.status(404).json({
+	  		error: 'Error la llamar el servicio'
 	  	});
 
   }
-	
+
 
 }
 
@@ -232,27 +237,26 @@ exports.getTaxonChildren = async function(req, res) {
       }
   };
 
-	// Caso DEM (source_id=4): no tiene jerarquía taxonómica.
-	// Retorna los bins de la variable de elevación directamente.
+	// Caso DEM (source_id=4): delega al endpoint secuencia del middleware DEM.
+	// Soporta la transición elevation_q<n> → categoria (bins de elevación).
 	if (Number(source_id) === 4) {
 		try {
-			const response = await axios.post(fuente.url_variables, { q: '', offset: 0, limit: 500 }, config);
+			const body = {
+				variableLevel: parentLevel,
+				variableValue: parentValue,
+				nextVariableLevel: childLevel
+			};
+			const response = await axios.post(fuente.url_secuencia, body, config);
 			const raw = response.data?.data || [];
-			const items = raw.map((row) => {
-				const d = row.datos || {};
-				const rangeLabel = (d.min_value != null && d.max_value != null)
-					? `${d.min_value} - ${d.max_value} m`
-					: (d.tag || String(row.level_id));
-				return {
-					value: String(row.level_id),
-					label: rangeLabel,
-					meta: { sourceKey: 'level_id', ...row }
-				};
-			});
+			const items = raw.map((row) => ({
+				value: String(row.value ?? ''),
+				label: String(row.label ?? row.value ?? ''),
+				meta: { ...row }
+			}));
 			return res.status(200).json(items);
 		} catch (error) {
-			console.error(`❌ Error enviando a ${fuente.url_variables}:`, error.message);
-			return res.status(404).json({ error: 'Error al llamar el servicio DEM' });
+			console.error(`❌ Error en DEM secuencia (${fuente.url_secuencia}):`, error.message);
+			return res.status(500).json({ error: 'Error al obtener categorías DEM desde secuencia' });
 		}
 	}
 
@@ -275,13 +279,28 @@ exports.getTaxonChildren = async function(req, res) {
 
         // Caso WorldClim (source_id=2)
         if (Number(source_id) === 2) {
-          const code = (row.layer ?? '').toString().trim();          // bio001
-          const human = (row.label ?? '').toString().trim();         // Annual Mean Temperature
-          const display = (code && human) ? `${code} - ${human}` : (code || human || val);
+          // Rango items have `tag` field; Layer items have `layer`+`label`
+          if (row.tag != null) {
+            const tagParts = String(row.tag).split(':');
+            const rounded = tagParts.length === 2
+              ? `${parseFloat(tagParts[0]).toFixed(2)} : ${parseFloat(tagParts[1]).toFixed(2)}`
+              : String(row.tag);
+            const layer = String(row.layer || '').trim();
+            const display = layer ? `${layer} [${rounded}]` : rounded;
+            return {
+              value: String(row.value ?? val),
+              label: display,
+              meta: { sourceKey: key, ...row }
+            };
+          }
 
+          // Layer items: "bio001 - Annual Mean Temperature"
+          const code = (row.layer ?? '').toString().trim();
+          const human = (row.label ?? '').toString().trim();
+          const display = (code && human) ? `${code} - ${human}` : (code || human || val);
           return {
-            value: code || val,    // bio001
-            label: display,        // bio001 - Annual Mean Temperature
+            value: code || val,
+            label: display,
             meta: { sourceKey: key, ...row }
           };
         }
@@ -677,11 +696,26 @@ exports.get_EpsScrRelation = async function(req, res) {
 
 
   try {
-    const n                 = await getGridLength(grid_id);   // #celdas del grid
+    const { n, regionCellsSet } = await getGridLength(grid_id);   // #celdas del grid + set de celdas válidas
     const target_ids_array  = await getSourceIds(target_body);
     const covars_ids_array  = await getSourceIds(covars_body);
     const targetCells_data  = await getDataInterccion(target_ids_array, grid_id);
     const covarsCells_data  = await getDataInterccion(covars_ids_array, grid_id);
+
+    // Filter each entity's cells to only those in the analysis region.
+    // Bulk entities (e.g. clase=Mammalia) can return cells outside Mexico;
+    // keeping them makes nj > n which forces epsilon = 0 in the 2x2 table.
+    const filterToRegion = (cells) => {
+      if (!regionCellsSet || !Array.isArray(cells)) return cells;
+      return cells.filter(c => regionCellsSet.has(c));
+    };
+    for (const obj of [...targetCells_data, ...covarsCells_data]) {
+      if (Array.isArray(obj.data)) {
+        for (const item of obj.data) {
+          if (Array.isArray(item.cells)) item.cells = filterToRegion(item.cells);
+        }
+      }
+    }
 
     debug("n: " + n);
     // debug(target_ids_array);
@@ -1125,9 +1159,9 @@ async function getSourceIds(body_request){
 
     	let fuente = sourcesDict[item.id_source];
     	let body = {
-    			q: item.q, 
-    			offset: item.offset, 
-    			limit: item.limit
+    			q: item.q,
+    			offset: item.offset,
+    			limit: Math.min(item.limit, fuente.query_limit || item.limit)
 			}
 
 			debug(body)
@@ -1221,7 +1255,7 @@ async function getDataInterccion(ids_array, grid_id){
 async function getGridLength(grid_id){
 
   console.log("getGridLength")
-  
+
   console.log("grid_id: " + grid_id)
 
 	const config = {
@@ -1231,6 +1265,7 @@ async function getGridLength(grid_id){
 	    };
 
 	let grid_length;
+	let regionCellsSet = null;
 
 	try {
 
@@ -1239,12 +1274,17 @@ async function getGridLength(grid_id){
 
       	grid_length = response.data.n
       	console.log("grid_length: " + grid_length)
-      			      
-    } 
+
+      	// Build a Set of valid region cell IDs for filtering covar/target cells
+      	if (Array.isArray(response.data.cells)) {
+      	  regionCellsSet = new Set(response.data.cells);
+      	}
+
+    }
     catch (error) {
       	console.error(`❌ Error:`, error.message);
     }
 
-	return grid_length       
+	return { n: grid_length, regionCellsSet }
 
 }
