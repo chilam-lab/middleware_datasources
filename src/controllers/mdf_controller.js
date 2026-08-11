@@ -529,6 +529,7 @@ exports.getCatArea = async function(req, res) {
 	debug("getCatArea")
 
 	let regionId = verb_utils.getParam(req, 'region_id', null)
+	let sourceId = verb_utils.getParam(req, 'source_id', null)
 
 	try {
 
@@ -544,9 +545,31 @@ exports.getCatArea = async function(req, res) {
 		const jsonData = await axios.get(url, config);
 		// console.log(jsonData.data.data)
 
+		let rows = jsonData.data.data;
+
+		// Filtra las mallas a las que la fuente elegida (SNIB/GBIF/...) da cobertura,
+		// según cat_taxon.available_grids de esa fuente (ej. SNIB solo cubre México).
+		if (sourceId !== null) {
+			const fuente = sourcesDict[sourceId];
+			if (fuente && fuente.url_catvar) {
+				try {
+					const varsResp = await axios.get(fuente.url_catvar, config);
+					const allowedGrids = new Set();
+					(varsResp.data?.data || []).forEach(v => {
+						(v.available_grids || []).forEach(g => allowedGrids.add(Number(g)));
+					});
+					if (allowedGrids.size > 0) {
+						rows = rows.filter(item => allowedGrids.has(Number(item.grid_id)));
+					}
+				} catch (e) {
+					console.error(`No se pudieron obtener available_grids para source_id=${sourceId}:`, e.message);
+				}
+			}
+		}
+
 		const regionMap = new Map();
 
-		jsonData.data.data.forEach(item => {
+		rows.forEach(item => {
 		  
 		  // const regions = item.footprint_region.split(";").map(r => r.trim());
 		  const region = item.footprint_region;
