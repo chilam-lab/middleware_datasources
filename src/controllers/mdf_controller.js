@@ -769,6 +769,23 @@ exports.get_EpsScrRelation = async function(req, res) {
 
     // console.log(targetCells_data)
 
+    // Precalcula el Set de celdas de cada covariable UNA sola vez: antes se
+    // reconstruía en cada iteración del target dentro del loop anidado (una vez
+    // por cada par target×covar en vez de una vez por covariable).
+    const covarItems = [];
+    for (const obj2 of covarsCells_data) {
+      for (const item2 of obj2.data) {
+        const covarCellsSet = toSet(item2.cells);
+        covarItems.push({
+          obj2,
+          item2,
+          id_covars: item2.level_id,
+          covarCellsSet,
+          nj_unique: covarCellsSet.size
+        });
+      }
+    }
+
     for (const obj1 of targetCells_data) {
       for (const item1 of obj1.data) {
 
@@ -779,21 +796,12 @@ exports.get_EpsScrRelation = async function(req, res) {
         const id_target = item1.level_id;
         const ni_unique = targetCellsSet.size; // # de celdas donde aparece el target
 
-        // console.log(covarsCells_data)
-
-        for (const obj2 of covarsCells_data) {
-          for (const item2 of obj2.data) {
+        for (const { obj2, item2, id_covars, covarCellsSet, nj_unique } of covarItems) {
 
           	// console.log(item2)
 
-            const id_covars = item2.level_id;
-
             // misma variable → saltar
             if (id_target === id_covars) continue;
-
-            // Celdas únicas para la covariable
-            const covarCellsSet = toSet(item2.cells);
-            const nj_unique = covarCellsSet.size;
 
             // Intersección por CELDAS ÚNICAS (coocurrencias por celda, no por ocurrencia)
             const interCells = intersectSets(targetCellsSet, covarCellsSet);
@@ -842,7 +850,6 @@ exports.get_EpsScrRelation = async function(req, res) {
               acumuladosPorCelda[cell].total_score   += (USE_BOUNDED_FOR_MAP ? score_bounded : score_log);
               acumuladosPorCelda[cell].k += 1;
             }
-          }
         }
       }
     }
@@ -1198,10 +1205,13 @@ async function getSourceIds(body_request){
 	      	let response_fullbody = response.data.data
 	      	// console.log(temp_response)
 
-	      	// agrupa los ids resultantes en un solo array
-	      	const ids_array = response_fullbody.map(function(item){
+	      	// agrupa los ids resultantes en un solo array, sin duplicados
+	      	// (si el buscador de una fuente devuelve level_id repetidos entre
+	      	// resultados distintos, aquí quedarían sin filtrar antes de pasar
+	      	// a getDataInterccion)
+	      	const ids_array = [...new Set(response_fullbody.map(function(item){
 				return item.level_id
-			}).flat()
+			}).flat())]
 			// console.log(ids_array)
 
 			// const data_target = response_fullbody.map(function(item){
