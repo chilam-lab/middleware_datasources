@@ -45,6 +45,9 @@ app.use(session({
 var mdfrouter = require('./routes/mdfrouter')
 app.use('/mdf', mdfrouter)
 
+var loaddatarouter = require('./routes/loaddatarouter')
+app.use('/loaddata', loaddatarouter)
+
 var mdfCtrl = require('./controllers/mdf_controller')
 
 // Load data sources from DB before starting the server

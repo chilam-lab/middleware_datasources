@@ -28,6 +28,11 @@ verb_utils.getParam = function (req, name, defaultValue) {
 }
 
 
+verb_utils.isNumeric = function(str) {
+  return !isNaN(str) && !isNaN(parseFloat(str))
+}
+
+
 verb_utils.makeid = function (length) {
     
     let result = '';

@@ -807,9 +807,6 @@ exports.get_EpsScrRelation = async function(req, res) {
             const interCells = intersectSets(targetCellsSet, covarCellsSet);
             const nij_unique = interCells.length;
 
-            console.log(interCells)
-            console.log("nij_unique: " + nij_unique)
-
             // Regla: solo si hay al menos min_occ celdas en común
             if (nij_unique < min_occ) continue;
 
@@ -917,6 +914,21 @@ exports.get_EpsScrRelation = async function(req, res) {
     await redis_client.set(id + "_EpsScrpRel", JSON.stringify(resp_ordenado), { EX: 15 * 60 });
     await redis_client.set(id + "_EpsScrCell", JSON.stringify(resumenPorCelda), { EX: 15 * 60 });
 
+    // Historial de análisis: solo si hay un usuario autenticado (req.authUser,
+    // adjuntado por el middleware attachAuthUser). Un análisis anónimo sigue
+    // funcionando igual que antes, simplemente no se persiste su config.
+    if (req.authUser) {
+      // meta: info legible (fuente/región/resolución) que arma el frontend en
+      // el momento de ejecutar, para que el historial sea entendible sin tener
+      // que decodificar el payload crudo. Se guarda aparte, no forma parte del
+      // payload que se reenvía tal cual al re-ejecutar.
+      const { sessionid, meta, ...analysisPayload } = req.body || {};
+      db.none(
+        'INSERT INTO analisis_historial (userid, uuid_redis, grid_id, min_occ, payload, meta) VALUES ($1, $2, $3, $4, $5, $6)',
+        [req.authUser.userid, id, grid_id, min_occ, analysisPayload, meta || null]
+      ).catch(err => debug('No se pudo guardar historial de análisis: ' + (err.message || err)));
+    }
+
     // === NUEVO: devolvemos también scoreDeciles ===
     res.status(200).json({
       EpsScrpRel: resp_ordenado,     // tabla de pares target-covar
@@ -928,6 +940,58 @@ exports.get_EpsScrRelation = async function(req, res) {
   } catch (error) {
     console.error('Error en la petición:', error?.response ? error.response.data : error.message);
     res.status(500).json({ error: 'get_EpsScrRelation failed' });
+  }
+};
+
+
+/**
+ * Lista el historial de configuraciones de análisis del usuario autenticado
+ * (req.authUser, resuelto por el middleware requireAuthUser). Solo se guarda
+ * el payload de entrada, no el resultado (que expira en Redis a los 15 min).
+ */
+exports.get_analysis_history = async function(req, res) {
+  debug("get_analysis_history");
+
+  try {
+    const rows = await db.any(
+      'SELECT id, uuid_redis, grid_id, min_occ, payload, meta, fecha_creacion FROM analisis_historial WHERE userid = $1 ORDER BY fecha_creacion DESC LIMIT 50',
+      [req.authUser.userid]
+    );
+    res.status(200).json({ status: 0, data: rows });
+  } catch (error) {
+    debug(error);
+    res.status(500).json({ status: 1, message: 'No se pudo obtener el historial de análisis' });
+  }
+};
+
+
+/**
+ * Borra una fila del historial de análisis, validando que pertenezca al
+ * usuario autenticado (nunca se confía en un userid mandado por el cliente).
+ */
+exports.delete_analysis_history = async function(req, res) {
+  debug("delete_analysis_history");
+
+  const id = verb_utils.getParam(req, 'id');
+
+  if (!id) {
+    return res.status(400).json({ status: 1, message: 'Falta el id a eliminar' });
+  }
+
+  try {
+    const result = await db.result(
+      'DELETE FROM analisis_historial WHERE id = $1 AND userid = $2',
+      [id, req.authUser.userid]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ status: 1, message: 'No encontrado' });
+    }
+
+    res.status(200).json({ status: 0, message: 'ok' });
+  } catch (error) {
+    debug(error);
+    res.status(500).json({ status: 1, message: 'No se pudo eliminar el registro' });
   }
 };
 

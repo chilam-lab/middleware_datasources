@@ -7,6 +7,7 @@
  */
 var router = require('express').Router()
 var mdfCtrl = require('../controllers/mdf_controller')
+var { attachAuthUser, requireAuthUser } = require('../middlewares/authSession')
 
 router.all('/', function(req, res) {
   res.json({ 
@@ -64,8 +65,17 @@ router.route('/getGeoJsonbyGridid')
 
 
 router.route('/getEpsScrRelation')
-  .get(mdfCtrl.get_EpsScrRelation)
-  .post(mdfCtrl.get_EpsScrRelation)
+  .get(attachAuthUser, mdfCtrl.get_EpsScrRelation)
+  .post(attachAuthUser, mdfCtrl.get_EpsScrRelation)
+
+
+router.route('/getAnalysisHistory')
+  .get(requireAuthUser, mdfCtrl.get_analysis_history)
+  .post(requireAuthUser, mdfCtrl.get_analysis_history)
+
+
+router.route('/deleteAnalysisHistory')
+  .post(requireAuthUser, mdfCtrl.delete_analysis_history)
 
 
 router.route('/getFrequencyByRange')
