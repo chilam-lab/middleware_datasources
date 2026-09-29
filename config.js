@@ -55,7 +55,22 @@ const config = {
     port:     process.env.MESH_DB_PORT,
     database: process.env.MESH_DB_NAME,
     user:     process.env.MESH_DB_USER,
-    password: process.env.MESH_DB_PWD
+    password: process.env.MESH_DB_PWD,
+    application_name: 'DataSources_Middleware',
+    poolSize: 10,
+    connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS || 5000),
+    idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS || 30000),
+    // Mismo tier que db_mallas en speciesdbbuild/gbifdbbuild: este pool hace
+    // el mismo tipo de cruce punto->celda (ST_Intersects contra grid_*_aoi en
+    // loaddata_controller.js), así que hereda su timeout de 600s en vez del
+    // de 60s de una consulta simple. Antes este pool no tenía ningún timeout.
+    query_timeout: Number(process.env.DB_MALLAS_QUERY_TIMEOUT_MS || 600000),
+    statement_timeout: Number(process.env.DB_MALLAS_STATEMENT_TIMEOUT_MS || 600000),
+    // work_mem por conexión de este pool (no global): todo lo que sale de
+    // mesh_db es cruce espacial, así que subirlo aquí no requiere clasificar
+    // cada query como "pesada" caso por caso.
+    options: '-c work_mem=32MB',
+    keepAlive: true,
   },
   SEED: process.env.SEED,
   TIME_TOKEN: process.env.TIME_TOKEN,
