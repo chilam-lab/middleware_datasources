@@ -8,7 +8,7 @@ const d3 = require('d3')
 const redis_client = require('../Utils/redisClient');
 var verb_utils = require('../Utils/verb_utils')
 const db = require('../Utils/db');
-const { getCellsForOwnedCollection } = require('../Utils/terceros_utils');
+const { getCellsForOwnedCollection, getCollectionContext } = require('../Utils/terceros_utils');
 
 console.log("*** host species: " + config.server_species.host)
 console.log("*** host snib: " + config.server_snib.host)
@@ -1386,12 +1386,27 @@ async function getThirdPartyCellsData(items, grid_id, authUser) {
       const result = await getCellsForOwnedCollection(item.id_data, grid_id, authUser.userid);
       if (!result || !result.column) continue; // no es dueño, no existe, o malla no soportada
 
+      // Contexto de lo que el usuario subió (taxonomía, nombre común, etc.)
+      // para que la tabla de resultados no muestre la colección "en blanco".
+      // Si falla, el análisis sigue con el metadata mínimo.
+      const ctx = await getCollectionContext(item.id_data)
+        .catch(err => { console.error('❌ Contexto de colección de terceros:', err.message); return null; });
+      const nombre = result.header.nombre_datos;
+      const especieUnica = ctx && (ctx.unicos.species || ctx.unicos.scientificname);
+
       response_cells_array.push({
         id_source: 'terceros',
         data: [{
           level_id: `terceros:${item.id_data}`,
           cells: result.rows.map(r => r.cell_id),
-          metadata: { nombre_datos: result.header.nombre_datos, id_data: item.id_data }
+          metadata: {
+            nombre_datos: nombre,
+            id_data: item.id_data,
+            fuente: 'Mis datos',
+            especie: especieUnica || nombre,
+            registros: ctx ? ctx.registros : undefined,
+            contexto: ctx ? ctx.contexto : undefined,
+          }
         }]
       });
     } catch (error) {

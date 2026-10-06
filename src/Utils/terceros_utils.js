@@ -62,4 +62,49 @@ async function getCellsForOwnedCollection(id_data, grid_id, userid) {
   };
 }
 
-module.exports = { RESOLUTION_COLUMN, resolveColumnForGrid, getCellsForOwnedCollection };
+// Orden preferido de llaves de contexto; las demás van después, alfabéticas.
+const CONTEXT_KEY_ORDER = [
+  'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species',
+  'scientificname', 'taxonrank', 'commonname',
+];
+const MAX_CONTEXT_VALUES = 3;
+
+/**
+ * Resume los metadatos libres de una colección (detalle_occ_terceros.metadata,
+ * lo que el usuario subió además de las coordenadas) para mostrarlos como
+ * contexto en los resultados del análisis: por cada llave, sus valores
+ * distintos (hasta MAX_CONTEXT_VALUES, con "(+N)" si hay más).
+ */
+async function getCollectionContext(id_data) {
+  const rows = await db.any(
+    `SELECT e.key AS k,
+            COUNT(DISTINCT e.value) AS distintos,
+            (ARRAY_AGG(DISTINCT e.value ORDER BY e.value))[1:$2] AS valores
+     FROM occ_terceros o
+     JOIN detalle_occ_terceros d ON d.idocc = o.id,
+          jsonb_each_text(d.metadata) e
+     WHERE o.idlista = $1 AND e.value IS NOT NULL AND e.value <> ''
+     GROUP BY e.key`,
+    [id_data, MAX_CONTEXT_VALUES]
+  );
+  const total = await db.one('SELECT COUNT(*)::int AS n FROM occ_terceros WHERE idlista = $1', [id_data]);
+
+  const rank = (k) => {
+    const i = CONTEXT_KEY_ORDER.indexOf(k.toLowerCase());
+    return i === -1 ? CONTEXT_KEY_ORDER.length : i;
+  };
+  rows.sort((a, b) => rank(a.k) - rank(b.k) || a.k.localeCompare(b.k));
+
+  const contexto = {};
+  const unicos = {};
+  for (const r of rows) {
+    const distintos = Number(r.distintos);
+    const extra = distintos > r.valores.length ? ` (+${distintos - r.valores.length})` : '';
+    contexto[r.k] = r.valores.join(', ') + extra;
+    if (distintos === 1) unicos[r.k.toLowerCase()] = r.valores[0];
+  }
+
+  return { registros: total.n, contexto, unicos };
+}
+
+module.exports = { RESOLUTION_COLUMN, resolveColumnForGrid, getCellsForOwnedCollection, getCollectionContext };
