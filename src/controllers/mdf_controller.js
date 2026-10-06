@@ -8,6 +8,7 @@ const d3 = require('d3')
 const redis_client = require('../Utils/redisClient');
 var verb_utils = require('../Utils/verb_utils')
 const db = require('../Utils/db');
+const { getCellsForOwnedCollection } = require('../Utils/terceros_utils');
 
 console.log("*** host species: " + config.server_species.host)
 console.log("*** host snib: " + config.server_snib.host)
@@ -718,12 +719,28 @@ exports.get_EpsScrRelation = async function(req, res) {
 
 
 
+  // Las colecciones propias ("Mis datos") se resuelven aparte, en proceso
+  // contra occ_terceros (ver getThirdPartyCellsData), en vez de vía el
+  // sourcesDict genérico basado en HTTP — porque son datos privados por
+  // usuario y ese pipeline no propaga autenticación.
+  const isTercero = (item) => item && item.id_source === 'terceros';
+  const target_catalog = (Array.isArray(target_body) ? target_body : []).filter(i => !isTercero(i));
+  const target_terceros = (Array.isArray(target_body) ? target_body : []).filter(isTercero);
+  const covars_catalog = (Array.isArray(covars_body) ? covars_body : []).filter(i => !isTercero(i));
+  const covars_terceros = (Array.isArray(covars_body) ? covars_body : []).filter(isTercero);
+
   try {
     const { n, regionCellsSet } = await getGridLength(grid_id);   // #celdas del grid + set de celdas válidas
-    const target_ids_array  = await getSourceIds(target_body);
-    const covars_ids_array  = await getSourceIds(covars_body);
-    const targetCells_data  = await getDataInterccion(target_ids_array, grid_id);
-    const covarsCells_data  = await getDataInterccion(covars_ids_array, grid_id);
+    const target_ids_array  = await getSourceIds(target_catalog);
+    const covars_ids_array  = await getSourceIds(covars_catalog);
+    const targetCells_data  = [
+      ...(await getDataInterccion(target_ids_array, grid_id)),
+      ...(await getThirdPartyCellsData(target_terceros, grid_id, req.authUser)),
+    ];
+    const covarsCells_data  = [
+      ...(await getDataInterccion(covars_ids_array, grid_id)),
+      ...(await getThirdPartyCellsData(covars_terceros, grid_id, req.authUser)),
+    ];
 
     // Filter each entity's cells to only those in the analysis region.
     // Bulk entities (e.g. clase=Mammalia) can return cells outside Mexico;
@@ -1348,6 +1365,42 @@ async function getDataInterccion(ids_array, grid_id){
 
 }
 
+
+/**
+ * Equivalente a getDataInterccion pero para colecciones propias ("Mis datos"),
+ * resueltas en proceso contra occ_terceros en vez de llamar a un sourcesDict
+ * externo — así no hace falta exponerlas como fuente pública/no autenticada
+ * en mdf_data_sources, y la verificación de dueño (userid) queda garantizada
+ * aquí mismo con la sesión ya resuelta por el middleware attachAuthUser.
+ * items: RelationQuery[] con id_source === 'terceros' e id_data = id de
+ * lista_carga_terceros. authUser: req.authUser (null si no hay sesión).
+ */
+async function getThirdPartyCellsData(items, grid_id, authUser) {
+  debug("getThirdPartyCellsData");
+
+  const response_cells_array = [];
+  if (!authUser || !Array.isArray(items) || items.length === 0) return response_cells_array;
+
+  for (const item of items) {
+    try {
+      const result = await getCellsForOwnedCollection(item.id_data, grid_id, authUser.userid);
+      if (!result || !result.column) continue; // no es dueño, no existe, o malla no soportada
+
+      response_cells_array.push({
+        id_source: 'terceros',
+        data: [{
+          level_id: `terceros:${item.id_data}`,
+          cells: result.rows.map(r => r.cell_id),
+          metadata: { nombre_datos: result.header.nombre_datos, id_data: item.id_data }
+        }]
+      });
+    } catch (error) {
+      console.error('❌ Error resolviendo colección de terceros:', error.message);
+    }
+  }
+
+  return response_cells_array;
+}
 
 async function getGridLength(grid_id){
 

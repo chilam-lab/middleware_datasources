@@ -23,4 +23,7 @@ router.route('/getLoadedDataById')
 router.route('/deleteLoadedData')
   .post(requireAuthUser, loadDataCtrl.deleteLoadedData)
 
+router.route('/getThirdPartyCells')
+  .post(requireAuthUser, loadDataCtrl.getThirdPartyCells)
+
 module.exports = router;

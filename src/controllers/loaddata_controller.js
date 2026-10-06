@@ -1,16 +1,34 @@
 /**
  * Carga de colecciones de datos de ocurrencias propias del usuario ("target"
- * bajo plantilla preestablecida). Porta el flujo ya usado en v1
- * (snib-middleware/src/controllers/loaddata.js), corrigiendo que aquí el
- * userid siempre viene de req.authUser (resuelto por requireAuthUser contra
- * auth_backend), nunca del body que manda el cliente.
+ * bajo plantilla genérica, alineada a species_v3.0). Porta el flujo ya usado
+ * en v1 (snib-middleware/src/controllers/loaddata.js), corrigiendo que aquí
+ * el userid siempre viene de req.authUser (resuelto por requireAuthUser
+ * contra auth_backend), nunca del body que manda el cliente.
+ *
+ * A diferencia de v1, solo las coordenadas son estrictamente requeridas.
+ * `occurrenceid` es recomendado y se autogenera si falta. Cualquier otro
+ * campo (taxonomía u otros atributos propios del proveedor de datos) viaja
+ * en `item.metadata` y se conserva tal cual en la columna `metadata` (jsonb)
+ * de `detalle_occ_terceros`, sin validarse ni interpretarse aquí. El cruce
+ * con la malla geográfica (columnas gridid_* de occ_terceros, vía
+ * ST_Intersects contra las tablas grid_*_aoi) no cambia: sigue pasando en el
+ * mismo INSERT, independiente de los pre-conteos por especie que se están
+ * reestructurando en paralelo (esos viven en otras tablas/servicios).
  */
 var debug = require('debug')('verbs:loaddata')
 var moment = require('moment')
 var verb_utils = require('../Utils/verb_utils')
 const db = require('../Utils/db');
+const { getCellsForOwnedCollection } = require('../Utils/terceros_utils');
 
 var CHAR_FORMAT = /[`!@#$%^&*()+\=\[\]{};'"\\|,<>\?~]/; // se aceptan espacios, guiones, puntos, dos puntos y diagonales
+
+// Campos taxonómicos "conocidos" de la plantilla v1/v2, mantenidos por
+// compatibilidad con consumidores existentes (getLoadedDataById). Si el
+// proveedor de datos los manda dentro de metadata, se replican también en
+// estas columnas; si no, quedan vacíos y el dato completo sigue disponible
+// en metadata.
+var LEGACY_TAXON_FIELDS = ['scientificname', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species', 'taxonrank'];
 
 const INSERT_OCC_QUERY = `
 WITH occ_terceros_result AS (
@@ -28,8 +46,8 @@ WITH occ_terceros_result AS (
   )
   RETURNING id
 )
-INSERT INTO detalle_occ_terceros (idocc, fechaevento, nombrecientifico, reino, phylum, clase, orden, familia, genero, especie, niveltaxonomico)
-SELECT id, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 FROM occ_terceros_result
+INSERT INTO detalle_occ_terceros (idocc, fechaevento, nombrecientifico, reino, phylum, clase, orden, familia, genero, especie, niveltaxonomico, metadata)
+SELECT id, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb FROM occ_terceros_result
 `;
 
 function dataValidation(json_data) {
@@ -38,36 +56,26 @@ function dataValidation(json_data) {
 
   json_data.forEach(function (item, index) {
 
-    if (CHAR_FORMAT.test(item.occurrenceid) || !item.occurrenceid) {
-      errors.push({ message: "Valor: " + item.occurrenceid + " Identificador con caracteres inválidos o vacío, linea: " + (index + 1) });
+    if (item.occurrenceid && CHAR_FORMAT.test(item.occurrenceid)) {
+      errors.push({ message: "Valor: " + item.occurrenceid + " Identificador con caracteres inválidos, linea: " + (index + 1) });
     }
 
-    if (!verb_utils.isNumeric(item.decimallatitude)) {
-      errors.push({ message: "Valor: " + item.decimallatitude + " Latitud no es número válido, linea: " + (index + 1) });
+    var lat = parseFloat(item.decimallatitude);
+    if (!verb_utils.isNumeric(item.decimallatitude) || lat < -90 || lat > 90) {
+      errors.push({ message: "Valor: " + item.decimallatitude + " Latitud no es número válido entre -90 y 90, linea: " + (index + 1) });
     }
 
-    if (!verb_utils.isNumeric(item.decimallongitude)) {
-      errors.push({ message: "Valor: " + item.decimallongitude + " Longitud no es número válido, linea: " + (index + 1) });
+    var lon = parseFloat(item.decimallongitude);
+    if (!verb_utils.isNumeric(item.decimallongitude) || lon < -180 || lon > 180) {
+      errors.push({ message: "Valor: " + item.decimallongitude + " Longitud no es número válido entre -180 y 180, linea: " + (index + 1) });
     }
 
     if (item.eventdate && !moment(item.eventdate, "YYYY-MM-DD", true).isValid() && !moment(item.eventdate, "DD/MM/YYYY", true).isValid()) {
       item.eventdate = moment().format('YYYY-MM-DD');
     }
 
-    ['kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species', 'scientificname', 'taxonrank'].forEach(function (field) {
-      if (CHAR_FORMAT.test(item[field])) {
-        errors.push({ message: "Valor: " + item[field] + " (" + field + ") con caracteres inválidos, linea: " + (index + 1) });
-      }
-    });
-
-    ['kingdom', 'phylum', 'class', 'order', 'family', 'taxonrank'].forEach(function (field) {
-      if (!item[field]) {
-        errors.push({ message: "Falta el campo requerido " + field + ", linea: " + (index + 1) });
-      }
-    });
-
-    if (item.taxonrank && !['family', 'genus', 'species'].includes(item.taxonrank)) {
-      errors.push({ message: "Valor: " + item.taxonrank + " Nivel taxonómico no reconocido (family|genus|species), linea: " + (index + 1) });
+    if (item.metadata && typeof item.metadata !== 'object') {
+      errors.push({ message: "metadata debe ser un objeto, linea: " + (index + 1) });
     }
 
   });
@@ -84,6 +92,12 @@ exports.loadOccDataGroup = async function (req, res) {
   if (!Array.isArray(json_data) || json_data.length === 0) {
     return res.status(400).json({ status: 1, message: 'json_data vacío o inválido' });
   }
+
+  json_data.forEach(function (item, index) {
+    if (!item.occurrenceid) {
+      item.occurrenceid = 'auto-' + (index + 1);
+    }
+  });
 
   var errors = dataValidation(json_data);
 
@@ -102,21 +116,17 @@ exports.loadOccDataGroup = async function (req, res) {
       );
 
       for (const item of json_data) {
+        const metadata = (item.metadata && typeof item.metadata === 'object') ? item.metadata : {};
+        const legacy = LEGACY_TAXON_FIELDS.map((field) => item[field] || metadata[field] || '');
+
         await t.none(INSERT_OCC_QUERY, [
           item.occurrenceid,
           item.decimallatitude,
           item.decimallongitude,
           header.id,
           item.eventdate || null,
-          item.scientificname || '',
-          item.kingdom || '',
-          item.phylum || '',
-          item.class || '',
-          item.order || '',
-          item.family || '',
-          item.genus || '',
-          item.species || '',
-          item.taxonrank || ''
+          ...legacy,
+          JSON.stringify(metadata),
         ]);
       }
 
@@ -162,7 +172,7 @@ exports.getLoadedDataById = async function (req, res) {
     }
 
     const rows = await db.any(
-      `SELECT o.*, d.fechaevento, d.nombrecientifico, d.reino, d.phylum, d.clase, d.orden, d.familia, d.genero, d.especie, d.niveltaxonomico
+      `SELECT o.*, d.fechaevento, d.nombrecientifico, d.reino, d.phylum, d.clase, d.orden, d.familia, d.genero, d.especie, d.niveltaxonomico, d.metadata
        FROM occ_terceros o
        LEFT JOIN detalle_occ_terceros d ON d.idocc = o.id
        WHERE o.idlista = $1`,
@@ -173,6 +183,40 @@ exports.getLoadedDataById = async function (req, res) {
   } catch (error) {
     debug(error);
     res.status(500).json({ status: 1, message: 'Error al obtener la colección' });
+  }
+};
+
+/**
+ * Celdas ocupadas por una colección propia, para previsualizarla en el mapa
+ * de Target (misma forma de respuesta que /mdf/getOccOnMap: {cell_id, occ}).
+ */
+exports.getThirdPartyCells = async function (req, res) {
+  debug("getThirdPartyCells");
+
+  const id_data = verb_utils.getParam(req, 'id_data');
+  const grid_id = verb_utils.getParam(req, 'grid_id');
+
+  if (!id_data || !grid_id) {
+    return res.status(400).json({ status: 1, message: 'Faltan id_data o grid_id' });
+  }
+
+  try {
+    const result = await getCellsForOwnedCollection(id_data, grid_id, req.authUser.userid);
+
+    if (!result) {
+      return res.status(404).json({ status: 1, message: 'Colección no encontrada' });
+    }
+    if (!result.column) {
+      return res.status(400).json({
+        status: 1,
+        message: 'La malla seleccionada no es compatible todavía con datos de terceros (solo 64km/32km/16km/8km/ageb/cue/mun/state nacional).',
+      });
+    }
+
+    res.status(200).json({ status: 0, data: result.rows });
+  } catch (error) {
+    debug(error);
+    res.status(500).json({ status: 1, message: 'Error al obtener las celdas de la colección' });
   }
 };
 
