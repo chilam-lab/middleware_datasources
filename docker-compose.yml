@@ -31,6 +31,10 @@ services:
       GBIF_HOST: ${GBIF_HOST}
       DEM_HOST: ${DEM_HOST}
 
+      # auth_backend: valida el sessionid (Mi cuenta, historial, Mis datos).
+      # Sin esto ninguna sesión se reconoce y esos endpoints responden 401.
+      AUTH_BACKEND_URL: ${AUTH_BACKEND_URL}
+
       # Base de datos malla/regiones
       MESH_DB_HOST: ${MESH_DB_HOST}
       MESH_DB_PORT: ${MESH_DB_PORT}
