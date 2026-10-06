@@ -42,10 +42,15 @@ app.use(session({
 }))
 
 // Routes for our api
+// Carga de colecciones propias: se monta también bajo /mdf/loaddata porque el
+// nginx de producción (species.conabio.gob.mx) solo reenvía /mdf/ a este
+// servicio, no /loaddata/. Va antes de /mdf para que no lo intercepte mdfrouter.
+var loaddatarouter = require('./routes/loaddatarouter')
+app.use('/mdf/loaddata', loaddatarouter)
+
 var mdfrouter = require('./routes/mdfrouter')
 app.use('/mdf', mdfrouter)
 
-var loaddatarouter = require('./routes/loaddatarouter')
 app.use('/loaddata', loaddatarouter)
 
 var mdfCtrl = require('./controllers/mdf_controller')
