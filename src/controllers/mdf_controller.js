@@ -776,10 +776,6 @@ exports.get_EpsScrRelation = async function(req, res) {
     const resultados = [];
     const acumuladosPorCelda = Object.create(null);
 
-    // Para evitar sumar más de una vez la misma coocurrencia por celda
-    // (target, covar) en la misma celda:
-    const seenCellPair = new Set(); // clave: `${cell}|${id_target}|${id_covars}`
-
     // Si quieres que el mapa use la versión bounded (suma estable):
     const USE_BOUNDED_FOR_MAP = true;
 
@@ -860,12 +856,12 @@ exports.get_EpsScrRelation = async function(req, res) {
               score: score_log
             });
 
-            // Para el mapa: sumar UNA VEZ por celda en interCells para este par
-            for (const cell of interCells) {
-              const key = `${cell}|${id_target}|${id_covars}`;
-              if (seenCellPair.has(key)) continue;   // ya sumado este par en esa celda
-              seenCellPair.add(key);
-
+            // Para el mapa: el score del par se suma en TODAS las celdas de la
+            // covariable dentro de la región (no solo donde coincide con el
+            // target), igual que la v1: así el mapa estima la presencia del
+            // target en toda la región a partir de sus covariables. Cada par
+            // (target, covar) se visita una sola vez, así que no se repite.
+            for (const cell of covarCellsSet) {
               if (!acumuladosPorCelda[cell]) {
                 // acumuladosPorCelda[cell] = { cell, total_epsilon: 0, total_score: 0, k: 0 };
                 acumuladosPorCelda[cell] = { cell, total_score: 0, k: 0, total_score_log: 0 };
