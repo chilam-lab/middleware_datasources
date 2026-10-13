@@ -435,7 +435,7 @@ exports.getOccOnMap = async function(req, res) {
     const levels_id = Array.from(levelsSet);
     if (levels_id.length === 0) {
       // No hay nada que consultar en el paso 2
-      return res.status(200).json({ data: [] });
+      return res.status(200).json({ data: [], summary: { species: 0, occurrences: 0, cells: 0 } });
     }
 
     // console.log(levels_id);
@@ -458,7 +458,8 @@ exports.getOccOnMap = async function(req, res) {
           grid_id,
           levels_id: levelsChunk,
           filter_names: target_filters.filter_names,
-          filter_values: target_filters.filter_values
+          filter_values: target_filters.filter_values,
+          with_counts: true
         };
         const resp = await axios.post(urlData, bodyData, axiosCfg);
         return resp.data; // se espera un array de objetos con "cells"
@@ -487,7 +488,20 @@ exports.getOccOnMap = async function(req, res) {
     // (opcional) ordenar por occ desc
     result.sort((a, b) => b.occ - a.occ);
 
-    return res.status(200).json({ data: result });
+    // Resumen para el mapa de Target (como el cuadro "Resumen" de la v1):
+    // registros de la fuente que pasan los filtros (n_occ, en toda su
+    // extensión, no solo la región) y celdas de la malla con presencia.
+    // cells = celdas dentro de la región del análisis (igual que ni en
+    // getEpsScrRelation); si no se puede obtener la región, todas.
+    let regionCells = null;
+    try { regionCells = (await getGridLength(grid_id)).regionCellsSet; } catch (e) { regionCells = null; }
+    const summary = {
+      species: flatData.filter(r => Array.isArray(r?.cells) && r.cells.length > 0).length,
+      occurrences: flatData.reduce((acc, r) => acc + (Number(r?.n_occ) || 0), 0),
+      cells: regionCells ? result.filter(r => regionCells.has(r.cell_id)).length : result.length,
+    };
+
+    return res.status(200).json({ data: result, summary });
 
   
     			      
