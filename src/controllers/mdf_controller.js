@@ -495,10 +495,13 @@ exports.getOccOnMap = async function(req, res) {
     // getEpsScrRelation); si no se puede obtener la región, todas.
     let regionCells = null;
     try { regionCells = (await getGridLength(grid_id)).regionCellsSet; } catch (e) { regionCells = null; }
+    // in_region: el front lo usa para descontar del resumen solo las celdas
+    // borradas que sí cuentan en el análisis.
+    if (regionCells) result.forEach(r => { r.in_region = regionCells.has(r.cell_id); });
     const summary = {
       species: flatData.filter(r => Array.isArray(r?.cells) && r.cells.length > 0).length,
       occurrences: flatData.reduce((acc, r) => acc + (Number(r?.n_occ) || 0), 0),
-      cells: regionCells ? result.filter(r => regionCells.has(r.cell_id)).length : result.length,
+      cells: regionCells ? result.filter(r => r.in_region).length : result.length,
     };
 
     return res.status(200).json({ data: result, summary });
@@ -737,6 +740,11 @@ exports.get_EpsScrRelation = async function(req, res) {
   const mapa_prob   = verb_utils.getParam(req, 'mapa_prob', false) === true;
   // Filtros del target (fecha, sin fecha, fósiles): solo aplican al target.
   const target_filters = buildTargetFilters(verb_utils.getParam(req, 'target_filters', null));
+  // Celdas que el usuario borró del mapa de Target: se quitan de la región
+  // (target, covariables, n y mapa), como si no fueran parte del área de estudio.
+  const excluded_cells = (Array.isArray(verb_utils.getParam(req, 'excluded_cells', []))
+    ? verb_utils.getParam(req, 'excluded_cells', []) : [])
+    .map(Number).filter(Number.isFinite);
 
   debug("grid_id: " + grid_id);
   debug("min_occ: " + min_occ);
@@ -757,7 +765,15 @@ exports.get_EpsScrRelation = async function(req, res) {
   const covars_terceros = (Array.isArray(covars_body) ? covars_body : []).filter(isTercero);
 
   try {
-    const { n, regionCellsSet } = await getGridLength(grid_id);   // #celdas del grid + set de celdas válidas
+    const grid = await getGridLength(grid_id);   // #celdas del grid + set de celdas válidas
+    const regionCellsSet = grid.regionCellsSet;
+    let n = grid.n;
+    if (excluded_cells.length && regionCellsSet) {
+      let removed = 0;
+      for (const c of excluded_cells) if (regionCellsSet.delete(c)) removed++;
+      n = n - removed;
+      debug("excluded_cells: " + excluded_cells.length + " (en región: " + removed + ") n: " + n);
+    }
     const target_ids_array  = await getSourceIds(target_catalog);
     const covars_ids_array  = await getSourceIds(covars_catalog);
     const targetCells_data  = [
