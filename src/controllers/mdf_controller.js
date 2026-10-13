@@ -522,6 +522,60 @@ exports.getOccOnMap = async function(req, res) {
 
 }
 
+/**
+ * Registros del target dentro de una celda (popup del mapa de Target, como el
+ * de la v1): nombre, año y liga a la ficha. Resuelve los level_id del target
+ * igual que getOccOnMap y pide a la fuente su /get-cell-occ con los mismos
+ * filtros. Body: { grid_id, cell_id, source_id, array_splist, filters }
+ */
+exports.getCellOccurrences = async function(req, res) {
+  debug("getCellOccurrences")
+
+  const grid_id = Number(verb_utils.getParam(req, 'grid_id', 0))
+  const cell_id = Number(verb_utils.getParam(req, 'cell_id', NaN))
+  const source_id = verb_utils.getParam(req, 'source_id', 1)
+  const array_splist = verb_utils.getParam(req, 'array_splist', [])
+  const target_filters = buildTargetFilters(verb_utils.getParam(req, 'filters', null))
+
+  const fuente = sourcesDict[source_id]
+  if (!fuente) return res.status(400).json({ error: 'source_id inválido' })
+  if (!grid_id || !Number.isFinite(cell_id) || !Array.isArray(array_splist) || array_splist.length === 0) {
+    return res.status(400).json({ error: 'Se requieren grid_id, cell_id y array_splist' })
+  }
+  // /<prefijo>/get-data/<id> -> /<prefijo>/get-cell-occ (solo SNIB/GBIF lo tienen).
+  const urlCell = String(fuente.url_data || '').replace(/\/get-data\/[^/]+$/, '/get-cell-occ')
+  if (!urlCell || urlCell === fuente.url_data) {
+    return res.status(400).json({ error: 'La fuente no tiene detalle de registros por celda' })
+  }
+
+  const axiosCfg = { headers: { 'Content-Type': 'application/json' } }
+  try {
+    const limit = fuente.query_limit || 1000
+    const idArrays = await Promise.all(array_splist.map(async (item) => {
+      const q = `${String(item.nivel || '').trim()} = ${String(item.valor || '').trim()}`
+      const resp = await axios.post(fuente.url_variables, { q, offset: 0, limit }, axiosCfg)
+      const ids = []
+      for (const row of (resp.data?.data || [])) {
+        const v = Array.isArray(row.level_id) ? row.level_id : [row.level_id]
+        for (const id of v) if (id != null && !Number.isNaN(Number(id))) ids.push(Number(id))
+      }
+      return ids
+    }))
+    const levels_id = [...new Set(idArrays.flat())]
+    if (levels_id.length === 0) return res.status(200).json({ cell_id, truncated: false, data: [] })
+
+    const resp = await axios.post(urlCell, {
+      grid_id, cell_id, levels_id,
+      filter_names: target_filters.filter_names,
+      filter_values: target_filters.filter_values,
+    }, axiosCfg)
+    return res.status(200).json(resp.data)
+  } catch (error) {
+    console.error('❌ Error en getCellOccurrences:', error?.response?.data || error.message)
+    return res.status(500).json({ error: 'Error al obtener los registros de la celda' })
+  }
+}
+
 exports.getOccMapaAnalisisNicho = async function(req, res) {
 
 	debug("getOccMapaAnalisisNicho")
