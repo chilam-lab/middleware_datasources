@@ -711,9 +711,18 @@ exports.get_EpsScrRelation = async function(req, res) {
   const min_occ     = verb_utils.getParam(req, 'min_occ', 5);
   const target_body = verb_utils.getParam(req, 'target', {});
   const covars_body = verb_utils.getParam(req, 'covars', {});
+  // Opciones del análisis (sección Covariables del front):
+  // - min_nj: descarta covariables presentes en menos de min_nj celdas de la
+  //   región (0 = sin filtro).
+  // - apriori / mapa_prob: el score por celda del mapa se calcula como en la
+  //   v1 (suma de scores log + ln(ni/(n-ni)); con mapa_prob, además logística).
+  const min_nj      = Math.max(0, parseInt(verb_utils.getParam(req, 'min_nj', 0), 10) || 0);
+  const apriori     = verb_utils.getParam(req, 'apriori', false) === true;
+  const mapa_prob   = verb_utils.getParam(req, 'mapa_prob', false) === true;
 
   debug("grid_id: " + grid_id);
   debug("min_occ: " + min_occ);
+  debug("min_nj: " + min_nj + " apriori: " + apriori + " mapa_prob: " + mapa_prob);
   debug(target_body);
   debug(covars_body);
 
@@ -793,6 +802,7 @@ exports.get_EpsScrRelation = async function(req, res) {
     for (const obj2 of covarsCells_data) {
       for (const item2 of obj2.data) {
         const covarCellsSet = toSet(item2.cells);
+        if (covarCellsSet.size < min_nj) continue;
         covarItems.push({
           obj2,
           item2,
@@ -858,10 +868,11 @@ exports.get_EpsScrRelation = async function(req, res) {
 
               if (!acumuladosPorCelda[cell]) {
                 // acumuladosPorCelda[cell] = { cell, total_epsilon: 0, total_score: 0, k: 0 };
-                acumuladosPorCelda[cell] = { cell, total_score: 0, k: 0 };
+                acumuladosPorCelda[cell] = { cell, total_score: 0, k: 0, total_score_log: 0 };
               }
               // acumuladosPorCelda[cell].total_epsilon += epsilon;
               acumuladosPorCelda[cell].total_score   += (USE_BOUNDED_FOR_MAP ? score_bounded : score_log);
+              acumuladosPorCelda[cell].total_score_log += score_log;
               acumuladosPorCelda[cell].k += 1;
             }
         }
@@ -870,6 +881,42 @@ exports.get_EpsScrRelation = async function(req, res) {
 
     // Para el mapa: dejamos la estructura actual (total_score + k)
     const resumenPorCelda = Object.values(acumuladosPorCelda);
+
+    // A priori / mapa de probabilidad (igual que processDataForScoreCell de la
+    // v1): score de la celda = suma de scores log + ln(ni/(n-ni)), con ni las
+    // celdas del target (unión de todos sus elementos). Con mapa_prob se pasa
+    // por la logística. Las celdas de la región sin coocurrencias reciben solo
+    // el a priori, como en la v1.
+    const useApriori = apriori || mapa_prob;
+    if (useApriori) {
+      const targetUnion = new Set();
+      for (const obj1 of targetCells_data) {
+        for (const item1 of (obj1.data || [])) {
+          for (const cell of (item1.cells || [])) targetUnion.add(cell);
+        }
+      }
+      const ni_total = targetUnion.size;
+      const val_apriori = (ni_total > 0 && ni_total < n) ? Math.log(ni_total / (n - ni_total)) : 0;
+      debug("ni_total: " + ni_total + " val_apriori: " + val_apriori);
+
+      const toFinal = (scoreLog) => {
+        const v = scoreLog + val_apriori;
+        if (!mapa_prob) return v;
+        if (v <= -700) return 0;
+        if (v >= 700) return 1;
+        return Math.exp(v) / (1 + Math.exp(v));
+      };
+      for (const o of resumenPorCelda) {
+        o.total_score = toFinal(o.total_score_log);
+      }
+      if (regionCellsSet) {
+        const empty = toFinal(0);
+        for (const cell of regionCellsSet) {
+          if (!acumuladosPorCelda[cell]) resumenPorCelda.push({ cell, total_score: empty, k: 0 });
+        }
+      }
+    }
+    resumenPorCelda.forEach(o => { delete o.total_score_log; });
 
     // Ordena tabla por magnitud de epsilon (o por score)
     const resp_ordenado = resultados.sort((a, b) => Math.abs(b.epsilon) - Math.abs(a.epsilon));
@@ -883,7 +930,9 @@ exports.get_EpsScrRelation = async function(req, res) {
         .map(o => {
           const total = o.total_score ?? 0;
           const k     = o.k ?? 1;
-          const score_cell = k ? (total / k) : 0;
+          // Con a priori / probabilidad el valor de la celda ya es el final
+          // (no un acumulado a promediar).
+          const score_cell = useApriori ? total : (k ? (total / k) : 0);
           return {
             cell: o.cell,
             score_cell
