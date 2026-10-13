@@ -346,6 +346,8 @@ exports.getOccOnMap = async function(req, res) {
 	let grid_id = verb_utils.getParam(req, 'grid_id', 1)
 	let array_splist = verb_utils.getParam(req, 'array_splist', [])
 	let source_id = verb_utils.getParam(req, 'source_id', 1)
+	// Filtros del target (fecha, sin fecha, fósiles), igual que en getEpsScrRelation.
+	const target_filters = buildTargetFilters(verb_utils.getParam(req, 'filters', null))
 
 	const fuente = sourcesDict[source_id];
   if (!fuente) {
@@ -455,8 +457,8 @@ exports.getOccOnMap = async function(req, res) {
         const bodyData = {
           grid_id,
           levels_id: levelsChunk,
-          filter_names: [],
-          filter_values: []
+          filter_names: target_filters.filter_names,
+          filter_values: target_filters.filter_values
         };
         const resp = await axios.post(urlData, bodyData, axiosCfg);
         return resp.data; // se espera un array de objetos con "cells"
@@ -719,6 +721,8 @@ exports.get_EpsScrRelation = async function(req, res) {
   const min_nj      = Math.max(0, parseInt(verb_utils.getParam(req, 'min_nj', 0), 10) || 0);
   const apriori     = verb_utils.getParam(req, 'apriori', false) === true;
   const mapa_prob   = verb_utils.getParam(req, 'mapa_prob', false) === true;
+  // Filtros del target (fecha, sin fecha, fósiles): solo aplican al target.
+  const target_filters = buildTargetFilters(verb_utils.getParam(req, 'target_filters', null));
 
   debug("grid_id: " + grid_id);
   debug("min_occ: " + min_occ);
@@ -743,7 +747,7 @@ exports.get_EpsScrRelation = async function(req, res) {
     const target_ids_array  = await getSourceIds(target_catalog);
     const covars_ids_array  = await getSourceIds(covars_catalog);
     const targetCells_data  = [
-      ...(await getDataInterccion(target_ids_array, grid_id)),
+      ...(await getDataInterccion(target_ids_array, grid_id, target_filters)),
       ...(await getThirdPartyCellsData(target_terceros, grid_id, req.authUser)),
     ];
     const covarsCells_data  = [
@@ -1295,6 +1299,27 @@ exports.get_EpsScr_bycell = async function(req, res) {
 
 // Funciones de apoyo para la ejecución de los servicios publicos
 
+/**
+ * Filtros del target (sección Target del front) -> filter_names/filter_values
+ * del get-data de cada fuente (SNIB/GBIF). Solo se mandan los que cambian el
+ * resultado: sin filtros, la fuente usa sus celdas precalculadas.
+ *   { fecha_inicio, fecha_fin, sin_fecha (incluir sin fecha), fosil (incluir fósiles) }
+ */
+function buildTargetFilters(f) {
+  const out = { filter_names: [], filter_values: [] };
+  if (!f || typeof f !== 'object') return out;
+  const add = (name, value) => { out.filter_names.push(name); out.filter_values.push(value); };
+  const year = (v) => {
+    const n = parseInt(v, 10);
+    return Number.isInteger(n) ? n : null;
+  };
+  if (f.fosil === false) add('in_fosil', false);
+  if (f.sin_fecha === false) add('in_sin_fecha', false);
+  if (year(f.fecha_inicio) !== null) add('fecha_inicio', year(f.fecha_inicio));
+  if (year(f.fecha_fin) !== null) add('fecha_fin', year(f.fecha_fin));
+  return out;
+}
+
 async function getSourceIds(body_request){
 
 	debug("getSourceIds")
@@ -1362,7 +1387,7 @@ async function getSourceIds(body_request){
 
 }
 
-async function getDataInterccion(ids_array, grid_id){
+async function getDataInterccion(ids_array, grid_id, filters = null){
 
 	debug("getDataInterccion")
 
@@ -1383,8 +1408,8 @@ async function getDataInterccion(ids_array, grid_id){
     	const body = {
 		    grid_id: grid_id,
 		    levels_id: item.id_array,
-		    filter_names:[],
-    		filter_values:[]
+		    filter_names: filters ? filters.filter_names : [],
+    		filter_values: filters ? filters.filter_values : []
 	    };
 
 	    debug(body)
