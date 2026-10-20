@@ -176,10 +176,14 @@ exports.getTaxonFromString = async function(req, res) {
 
   let query = variable + " = " + taxon_string
 
+  // match: 'prefix' → las fuentes buscan también el nivel especie por inicio
+  // ("lyn" → Lynx rufus); sin esto, especie compara exacto y nunca hay
+  // sugerencias.
   let body = {
 			q: query, 
 			offset: 0, 
-			limit: 10
+			limit: 10,
+			match: 'prefix'
 	}
 
 	console.log(body)
@@ -1192,12 +1196,21 @@ exports.delete_analysis_history = async function(req, res) {
 
 
 // En tu controlador de nicho (mismo archivo donde está get_EpsScrRelation)
+/**
+ * Tabla por deciles, como la versión estable (processDataForScoreDecilTable +
+ * getPercentageOccPerDecil): las CELDAS del mapa se ordenan por su score y se
+ * parten en 10 deciles (mismo reparto que scoreDeciles); para el decil pedido
+ * se listan las covariables presentes en sus celdas con:
+ *   njd        celdas de la covariable dentro del decil
+ *   cobertura  njd / nj · 100  (qué parte de la covariable cae en el decil)
+ *   ocupacion  njd / celdas del decil · 100  (qué parte del decil ocupa)
+ * Body: { uuid, decile }.
+ */
 exports.get_EpsScrRelationDecile = async function(req, res) {
   debug("get_EpsScrRelationDecile");
 
   const uuid   = verb_utils.getParam(req, 'uuid', null);
   const decile = parseInt(verb_utils.getParam(req, 'decile', 10), 10);
-  const metric = verb_utils.getParam(req, 'metric', 'epsilon'); // 'epsilon' | 'score'
 
   if (!uuid) {
     return res.status(400).json({ error: 'Falta uuid' });
@@ -1205,65 +1218,54 @@ exports.get_EpsScrRelationDecile = async function(req, res) {
   if (Number.isNaN(decile) || decile < 1 || decile > 10) {
     return res.status(400).json({ error: 'Decil inválido (1–10)' });
   }
-  if (!['epsilon', 'score'].includes(metric)) {
-    return res.status(400).json({ error: 'Métrica inválida (epsilon|score)' });
-  }
 
   try {
-    const key = uuid + "_EpsScrpRel";
-    const raw = await redis_client.get(key);
-    if (!raw) {
-      return res.status(404).json({ error: 'No se encontró EpsScrpRel para ese uuid' });
+    const [relRaw, cellRaw, covRaw] = await Promise.all([
+      redis_client.get(uuid + "_EpsScrpRel"),
+      redis_client.get(uuid + "_EpsScrCell"),
+      redis_client.get(uuid + "_EpsScrCovCells"),
+    ]);
+    if (!relRaw || !cellRaw || !covRaw) {
+      return res.status(404).json({ error: 'El análisis expiró; vuelve a ejecutarlo.' });
     }
+    const rel = JSON.parse(relRaw);
+    const cells = JSON.parse(cellRaw)
+      .filter(c => Number.isFinite(Number(c.total_score)))
+      .sort((a, b) => Number(a.total_score) - Number(b.total_score));
+    const covCells = JSON.parse(covRaw);
 
-    /** @type {Array<any>} */
-    const rows = JSON.parse(raw);
+    // Mismo reparto que scoreDeciles: índice ascendente → decil 1..10.
+    const m = cells.length;
+    const decileCells = new Set();
+    let minVal = null, maxVal = null;
+    cells.forEach((c, idx) => {
+      const d = Math.min(9, Math.floor((idx * 10) / m)) + 1;
+      if (d !== decile) return;
+      decileCells.add(Number(c.cell));
+      const v = Number(c.total_score);
+      if (minVal === null || v < minVal) minVal = v;
+      if (maxVal === null || v > maxVal) maxVal = v;
+    });
+    const nDecile = decileCells.size;
 
-    if (!Array.isArray(rows) || rows.length === 0) {
-      return res.json([]);
+    const rows = [];
+    for (const r of rel) {
+      const list = covCells[`${r.idsource_covars}:${r.id_covars}`];
+      if (!list || !nDecile) continue;
+      let njd = 0;
+      for (const c of list) if (decileCells.has(Number(c))) njd++;
+      if (!njd) continue;
+      rows.push({
+        ...r,
+        decil: decile,
+        njd,
+        cobertura: r.nj > 0 ? (njd / r.nj) * 100 : 0,
+        ocupacion: (njd / nDecile) * 100,
+      });
     }
+    rows.sort((a, b) => b.epsilon - a.epsilon);
 
-    // Ordenamos por la métrica elegida
-    const sorted = [...rows].sort((a, b) => {
-      const av = Number(a[metric] ?? 0);
-      const bv = Number(b[metric] ?? 0);
-      return av - bv;
-    });
-
-    const getPercentile = (arr, p) => {
-      const n = arr.length;
-      if (n === 0) return NaN;
-      const idx = (p / 100) * (n - 1);
-      const lower = Math.floor(idx);
-      const upper = Math.ceil(idx);
-      if (lower === upper) return Number(arr[lower][metric] ?? 0);
-      const w = idx - lower;
-      const vLow = Number(arr[lower][metric] ?? 0);
-      const vUp  = Number(arr[upper][metric] ?? 0);
-      return vLow * (1 - w) + vUp * w;
-    };
-
-    const pLow  = (decile - 1) * 10;
-    const pHigh = decile * 10;
-
-    const minVal = getPercentile(sorted, pLow);
-    const maxVal = getPercentile(sorted, pHigh);
-
-    // Filtramos filas que caen en ese rango de la métrica
-    const filtered = rows.filter(r => {
-      const v = Number(r[metric] ?? 0);
-      return v >= minVal && v <= maxVal;
-    });
-
-    return res.json({
-      uuid,
-      decile,
-      metric,
-      min: minVal,
-      max: maxVal,
-      count: filtered.length,
-      rows: filtered
-    });
+    return res.json({ uuid, decile, min: minVal, max: maxVal, decile_cells: nDecile, count: rows.length, rows });
 
   } catch (err) {
     console.error('get_EpsScrRelationDecile error:', err);
