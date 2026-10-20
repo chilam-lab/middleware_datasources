@@ -379,8 +379,6 @@ exports.getOccOnMap = async function(req, res) {
     // =========================
     // PASO 1: obtener level_id
     // =========================
-    const limit  = fuente.query_limit || 1000;
-    const offset = 0;
 
     // console.log(array_splist)
 
@@ -399,13 +397,8 @@ exports.getOccOnMap = async function(req, res) {
 
         // console.log("q: " + q);
 
-        const bodyQuery = { q, offset, limit };
-        const resp = await axios.post(urlQuery, bodyQuery, axiosCfg);
-
-        // console.log(resp.data);
-
-        // resp.data.data = array de objetos que traen level_id: number[] o number
-        const rows = resp.data?.data || [];
+        // Todas las páginas (antes solo las primeras query_limit filas).
+        const rows = await fetchAllVariableRows(fuente, q);
         const collected = [];
 
         for (const row of rows) {
@@ -551,12 +544,10 @@ exports.getCellOccurrences = async function(req, res) {
 
   const axiosCfg = { headers: { 'Content-Type': 'application/json' } }
   try {
-    const limit = fuente.query_limit || 1000
     const idArrays = await Promise.all(array_splist.map(async (item) => {
       const q = `${String(item.nivel || '').trim()} = ${String(item.valor || '').trim()}`
-      const resp = await axios.post(fuente.url_variables, { q, offset: 0, limit }, axiosCfg)
       const ids = []
-      for (const row of (resp.data?.data || [])) {
+      for (const row of await fetchAllVariableRows(fuente, q)) {
         const v = Array.isArray(row.level_id) ? row.level_id : [row.level_id]
         for (const id of v) if (id != null && !Number.isNaN(Number(id))) ids.push(Number(id))
       }
@@ -1517,6 +1508,29 @@ exports.get_EpsScr_bycell = async function(req, res) {
 // Funciones de apoyo para la ejecución de los servicios publicos
 
 /**
+ * Todas las filas de /variables de una fuente para un query, paginando de
+ * query_limit en query_limit. Antes se hacía UNA sola petición con
+ * limit = query_limit (1000 en SNIB/GBIF, 500 en DEM): un grupo grande como
+ * clase = Mammalia (2,268 especies) se quedaba en las primeras 1,000 sin aviso.
+ * maxRows (opcional) acota el total.
+ */
+async function fetchAllVariableRows(fuente, q, maxRows = Infinity) {
+  const pageSize = fuente.query_limit || 1000;
+  const cfg = { headers: { 'Content-Type': 'application/json' } };
+  const rows = [];
+  for (let offset = 0; rows.length < maxRows; offset += pageSize) {
+    const limit = Math.min(pageSize, maxRows - rows.length);
+    const resp = await axios.post(fuente.url_variables, { q, offset, limit }, cfg);
+    const page = resp.data?.data || [];
+    rows.push(...page);
+    if (page.length < limit) break;
+    if (offset > 200 * pageSize) { debug('fetchAllVariableRows: corte de seguridad en ' + rows.length + ' filas'); break; }
+  }
+  return rows;
+}
+
+
+/**
  * Filtros del target (sección Target del front) -> filter_names/filter_values
  * del get-data de cada fuente (SNIB/GBIF). Solo se mandan los que cambian el
  * resultado: sin filtros, la fuente usa sus celdas precalculadas.
@@ -1556,21 +1570,13 @@ async function getSourceIds(body_request){
     	temp_response.id_source = item.id_source
 
     	let fuente = sourcesDict[item.id_source];
-    	let body = {
-    			q: item.q,
-    			offset: item.offset,
-    			limit: Math.min(item.limit, fuente.query_limit || item.limit)
-			}
-
-			debug(body)
+    	debug({ q: item.q, limit: item.limit })
 
     	try {
 
-    		// responde los ids dado el query
-	      	const response = await axios.post(fuente.url_variables, body, config);
-	      	// console.log(response.data.data)
-
-	      	let response_fullbody = response.data.data
+    		// responde los ids dado el query (todas las páginas, hasta item.limit)
+	      	const maxRows = Number(item.limit) > 0 ? Number(item.limit) : Infinity;
+	      	let response_fullbody = await fetchAllVariableRows(fuente, item.q, maxRows)
 	      	// console.log(temp_response)
 
 	      	// agrupa los ids resultantes en un solo array, sin duplicados
