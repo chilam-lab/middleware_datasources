@@ -141,6 +141,31 @@ verb_utils.getEpsilon = function(nj, nij, ni, n, opts) {
 // };
 
 
+/**
+ * Fórmulas de la versión estable (v1), iguales a las funciones SQL get_score y
+ * get_epsilon de snib-middleware, con alpha = 1/n como allá
+ * (getCountsTaxonsGroup: alpha = 1.0/n). Son las que usa el análisis.
+ *   scoreV1   = ln( ((nij + a/2)/(ni + a)) / (((nj - nij) + a/2)/((n - ni) + a)) )
+ *   epsilonV1 = nj·((nij + a/2)/(nj + a) − p) / sqrt(nj·p·(1 − p)),  p = (ni + a)/(n + 2a)
+ */
+verb_utils.scoreV1 = function(nj, nij, ni, n, alpha) {
+  if (!(n > 0) || !(ni >= 0) || !(nj >= 0) || !(nij >= 0)) return 0;
+  const a = Number.isFinite(alpha) ? alpha : 1 / n;
+  const p1 = (nij + a / 2) / (ni + a);
+  const p0 = ((nj - nij) + a / 2) / ((n - ni) + a);
+  if (!(p1 > 0) || !(p0 > 0)) return 0;
+  return Math.log(p1 / p0);
+};
+
+verb_utils.epsilonV1 = function(nj, nij, ni, n, alpha) {
+  if (!(n > 0) || !(nj > 0) || !(ni >= 0) || !(nij >= 0)) return 0;
+  const a = Number.isFinite(alpha) ? alpha : 1 / n;
+  const p = (ni + a) / (n + 2 * a);
+  const den = Math.sqrt(nj * p * (1 - p));
+  if (!(den > 0)) return 0;
+  return (nj * ((nij + a / 2) / (nj + a) - p)) / den;
+};
+
 verb_utils.getScore = function(nj, nij, ni, n, opts) {
   const alpha = (opts && Number.isFinite(opts.alpha)) ? opts.alpha : 0.5;
   const mode  = (opts && typeof opts.mode === 'string') ? opts.mode : 'ratio';

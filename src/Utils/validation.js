@@ -45,7 +45,6 @@ function fold(arr, i, k) {
  * @param {number} p.min_nj      mínimo de nj por covariable
  * @param {boolean} p.useApriori score log + a priori (apriori o mapa_prob)
  * @param {boolean} p.mapaProb   pasar el score por la logística
- * @param {boolean} p.useBounded score acotado (mapa sin a priori)
  */
 function runValidation(p) {
   const k = Math.max(2, Math.floor(p.iterations) || 5);
@@ -86,9 +85,8 @@ function runValidation(p) {
         for (const x of small) if (large.has(x)) nij++;
         if (nij < p.min_occ) continue;
         const nj = c.train.size;
-        const score = p.useBounded
-          ? verb_utils.getScore(nj, nij, ni, n_f, { mode: 'bounded', alpha: 0.5 })
-          : verb_utils.getScore(nj, nij, ni, n_f, { mode: 'log', alpha: 0.5 });
+        // Misma fórmula que el análisis (versión estable, alpha = 1/n).
+        const score = verb_utils.scoreV1(nj, nij, ni, n_f, 1 / n_f);
         aportes.set(c.key, (aportes.get(c.key) || 0) + score);
       }
     }

@@ -859,8 +859,10 @@ exports.get_EpsScrRelation = async function(req, res) {
     const acumuladosPorCelda = Object.create(null);
     const covarCellsUsed = Object.create(null); // "<id_source>:<id_covars>" -> Set de celdas
 
-    // Si quieres que el mapa use la versión bounded (suma estable):
-    const USE_BOUNDED_FOR_MAP = true;
+    // Score de la celda = SUMA de ln(score) de las covariables presentes en
+    // ella, como la versión estable (antes: promedio de un score acotado
+    // tanh(0.5·ln), que cambiaba la escala del mapa y de los deciles).
+    const USE_BOUNDED_FOR_MAP = false;
 
     // Helpers
     const toSet = arr => new Set(Array.isArray(arr) ? arr : []);
@@ -881,7 +883,8 @@ exports.get_EpsScrRelation = async function(req, res) {
     for (const obj2 of covarsCells_data) {
       for (const item2 of obj2.data) {
         const covarCellsSet = toSet(item2.cells);
-        if (covarCellsSet.size < min_nj) continue;
+        // Sin celdas en la región no aporta nada (y su score con nj = 0 sería engañoso).
+        if (covarCellsSet.size === 0 || covarCellsSet.size < min_nj) continue;
         covarItems.push({
           obj2,
           item2,
@@ -913,15 +916,15 @@ exports.get_EpsScrRelation = async function(req, res) {
             const interCells = intersectSets(targetCellsSet, covarCellsSet);
             const nij_unique = interCells.length;
 
-            // Regla: solo si hay al menos min_occ celdas en común
-            if (nij_unique < min_occ) continue;
+            // Como la versión estable: TODOS los pares cuentan, también los de
+            // nij = 0 (evidencia negativa). El único mínimo es sobre nj
+            // (min_nj, arriba). Antes aquí se descartaba nij < min_occ, que
+            // quitaba la evidencia negativa del mapa y de los deciles.
 
-            // === Métricas con conteo por celdas únicas ===
-            const epsilon = verb_utils.getEpsilon(nj_unique, nij_unique, ni_unique, n);
-
-            // Score en log-ratio (negativo/positivo).
-            const score_log     = verb_utils.getScore(nj_unique, nij_unique, ni_unique, n, { mode: 'log',     alpha: 0.5 });
-            const score_bounded = verb_utils.getScore(nj_unique, nij_unique, ni_unique, n, { mode: 'bounded', alpha: 0.5 });
+            // === Métricas de la versión estable (alpha = 1/n) ===
+            const alpha = 1 / n;
+            const epsilon = verb_utils.epsilonV1(nj_unique, nij_unique, ni_unique, n, alpha);
+            const score_log = verb_utils.scoreV1(nj_unique, nij_unique, ni_unique, n, alpha);
 
             // Celdas de la covariable, para el detalle por celda del mapa
             // (getEpsScrCellDetail): qué covariables caen en cada celda.
@@ -954,7 +957,7 @@ exports.get_EpsScrRelation = async function(req, res) {
                 acumuladosPorCelda[cell] = { cell, total_score: 0, k: 0, total_score_log: 0 };
               }
               // acumuladosPorCelda[cell].total_epsilon += epsilon;
-              acumuladosPorCelda[cell].total_score   += (USE_BOUNDED_FOR_MAP ? score_bounded : score_log);
+              acumuladosPorCelda[cell].total_score   += score_log;
               acumuladosPorCelda[cell].total_score_log += score_log;
               acumuladosPorCelda[cell].k += 1;
             }
@@ -1019,7 +1022,8 @@ exports.get_EpsScrRelation = async function(req, res) {
           const k     = o.k ?? 1;
           // Con a priori / probabilidad el valor de la celda ya es el final
           // (no un acumulado a promediar).
-          const score_cell = useApriori ? total : (k ? (total / k) : 0);
+          // Como la versión estable: el score de la celda es la suma (no el promedio).
+          const score_cell = total;
           return {
             cell: o.cell,
             score_cell
@@ -1082,11 +1086,10 @@ exports.get_EpsScrRelation = async function(req, res) {
         regionCells: regionCellsSet || new Set(),
         n,
         iterations: validation_iterations,
-        min_occ: Number(min_occ) || 0,
+        min_occ: 0, // como el análisis: sin corte por nij
         min_nj,
         useApriori,
         mapaProb: mapa_prob,
-        useBounded: !useApriori && USE_BOUNDED_FOR_MAP,
       });
       debug(`validación (${validation_iterations} iteraciones) en ${Date.now() - t0} ms`);
       await redis_client.set(id + "_EpsScrValidation", JSON.stringify(validation), { EX: 15 * 60 });
@@ -1392,11 +1395,9 @@ exports.get_EpsScrCellDetail = async function(req, res) {
     const covariables = [];
     for (const r of rel) {
       if (!inCell(`${r.idsource_covars}:${r.id_covars}`)) continue;
-      // Aporte al valor de la celda en el mapa: score acotado sin a priori
-      // (USE_BOUNDED_FOR_MAP) o el score log con a priori / probabilidad.
-      const aporte = meta.use_bounded
-        ? verb_utils.getScore(r.nj, r.num_nij, r.ni, r.n, { mode: 'bounded', alpha: 0.5 })
-        : r.score;
+      // Aporte al valor de la celda en el mapa: el ln(score) del par (la
+      // celda suma los de todas sus covariables, como la versión estable).
+      const aporte = r.score;
       covariables.push({
         idsource_covars: r.idsource_covars,
         id_covars: r.id_covars,
