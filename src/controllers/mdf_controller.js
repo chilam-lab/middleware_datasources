@@ -9,7 +9,7 @@ const redis_client = require('../Utils/redisClient');
 var verb_utils = require('../Utils/verb_utils')
 const db = require('../Utils/db');
 const { getCellsForOwnedCollection, getCollectionContext } = require('../Utils/terceros_utils');
-const { runValidation } = require('../Utils/validation');
+const { runValidation, fullModelRecall } = require('../Utils/validation');
 
 console.log("*** host species: " + config.server_species.host)
 console.log("*** host snib: " + config.server_snib.host)
@@ -1078,11 +1078,17 @@ exports.get_EpsScrRelation = async function(req, res) {
     // Validación: se calcula sobre los mismos datos ya cargados (sin volver a
     // consultar las fuentes) y queda en Redis para getEpsScrValidation.
     let validation = null;
+    const targetIds = new Set(targetCells_data.flatMap(o => (o.data || []).map(it => String(it.level_id))));
     if (validation_iterations >= 2) {
       const t0 = Date.now();
       validation = runValidation({
         targetItems: targetCells_data.flatMap(o => (o.data || []).map(it => ({ cells: Array.isArray(it.cells) ? it.cells : [] }))),
-        covarItems: covarItems.map(c => ({ key: `${c.obj2.id_source}:${c.id_covars}`, cells: c.covarCellsSet })),
+        // Sin el propio target como covariable (el análisis principal también
+        // salta ese par): si no, cada celda de prueba recibiría el aporte del
+        // target, que por definición está en ella.
+        covarItems: covarItems
+          .filter(c => !targetIds.has(String(c.id_covars)))
+          .map(c => ({ key: `${c.obj2.id_source}:${c.id_covars}`, cells: c.covarCellsSet })),
         regionCells: regionCellsSet || new Set(),
         n,
         iterations: validation_iterations,
@@ -1092,8 +1098,14 @@ exports.get_EpsScrRelation = async function(req, res) {
         mapaProb: mapa_prob,
       });
       debug(`validación (${validation_iterations} iteraciones) en ${Date.now() - t0} ms`);
-      await redis_client.set(id + "_EpsScrValidation", JSON.stringify(validation), { EX: 15 * 60 });
+    } else {
+      // Sin validación: recall con el modelo completo, como la versión estable
+      // (línea de recall sobre los deciles aunque no se active la validación).
+      const targetRegion = new Set();
+      for (const o of targetCells_data) for (const it of (o.data || [])) for (const c of (it.cells || [])) targetRegion.add(c);
+      validation = fullModelRecall(targetRegion, new Map(resumenPorCelda.map(o => [Number(o.cell), o.total_score])));
     }
+    await redis_client.set(id + "_EpsScrValidation", JSON.stringify(validation), { EX: 15 * 60 });
 
     // Historial de análisis: solo si hay un usuario autenticado (req.authUser,
     // adjuntado por el middleware attachAuthUser). Un análisis anónimo sigue

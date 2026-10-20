@@ -176,4 +176,32 @@ function runValidation(p) {
   };
 }
 
-module.exports = { runValidation };
+/**
+ * Recall SIN validación, como la versión estable cuando no se activa la
+ * validación (getValidationDataNoValidation): todas las celdas del target se
+ * califican con el modelo completo (sin apartar ninguna) contra los deciles del
+ * score de todas las celdas del mapa.
+ * @param {Iterable<number>} targetCells celdas del target en la región
+ * @param {Map<number, number>} cellScores score final de cada celda del mapa
+ */
+function fullModelRecall(targetCells, cellScores) {
+  const sorted = [...cellScores.values()].sort((a, b) => b - a);
+  const cells = [...targetCells];
+  const deciles = [];
+  for (let d = 10; d >= 1; d--) {
+    if (!sorted.length) { deciles.push({ decil: d, recall: null, recall_min: null, recall_max: null, vp: 0, fn: 0, nulo: cells.length }); continue; }
+    const threshold = sorted[Math.min(sorted.length - 1, Math.ceil((sorted.length * (11 - d)) / 10) - 1)];
+    let vp = 0, fn = 0, nulo = 0;
+    for (const c of cells) {
+      const s = cellScores.get(c);
+      if (s === undefined) nulo++;
+      else if (s >= threshold) vp++;
+      else fn++;
+    }
+    const recall = vp + fn > 0 ? vp / (vp + fn) : null;
+    deciles.push({ decil: d, recall, recall_min: recall, recall_max: recall, vp, fn, nulo });
+  }
+  return { iterations: 1, full_model: true, target_cells: cells.length, deciles };
+}
+
+module.exports = { runValidation, fullModelRecall };
