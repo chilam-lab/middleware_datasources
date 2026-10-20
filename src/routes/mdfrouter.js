@@ -86,6 +86,9 @@ router.route('/getFrequencyByRange')
   .post(mdfCtrl.get_freq_byrange)
 
 
+router.route('/getEpsScrCellDetail')
+  .post(mdfCtrl.get_EpsScrCellDetail)
+
 router.route('/getEpsScrByCell')
   .get(mdfCtrl.get_EpsScr_bycell)
   .post(mdfCtrl.get_EpsScr_bycell)

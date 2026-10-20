@@ -863,6 +863,7 @@ exports.get_EpsScrRelation = async function(req, res) {
 
     const resultados = [];
     const acumuladosPorCelda = Object.create(null);
+    const covarCellsUsed = Object.create(null); // "<id_source>:<id_covars>" -> Set de celdas
 
     // Si quieres que el mapa use la versión bounded (suma estable):
     const USE_BOUNDED_FOR_MAP = true;
@@ -928,6 +929,10 @@ exports.get_EpsScrRelation = async function(req, res) {
             const score_log     = verb_utils.getScore(nj_unique, nij_unique, ni_unique, n, { mode: 'log',     alpha: 0.5 });
             const score_bounded = verb_utils.getScore(nj_unique, nij_unique, ni_unique, n, { mode: 'bounded', alpha: 0.5 });
 
+            // Celdas de la covariable, para el detalle por celda del mapa
+            // (getEpsScrCellDetail): qué covariables caen en cada celda.
+            covarCellsUsed[`${obj2.id_source}:${id_covars}`] = covarCellsSet;
+
             // Para la tabla: guardo los valores por par (target, covar)
             resultados.push({
               idsource_target: obj1.id_source,
@@ -972,6 +977,8 @@ exports.get_EpsScrRelation = async function(req, res) {
     // por la logística. Las celdas de la región sin coocurrencias reciben solo
     // el a priori, como en la v1.
     const useApriori = apriori || mapa_prob;
+    // Parámetros del cálculo del mapa, para explicar cada celda en el detalle.
+    const analysisMeta = { apriori, mapa_prob, use_bounded: !useApriori && USE_BOUNDED_FOR_MAP, val_apriori: null, ni_total: null, n };
     if (useApriori) {
       const targetUnion = new Set();
       for (const obj1 of targetCells_data) {
@@ -982,6 +989,8 @@ exports.get_EpsScrRelation = async function(req, res) {
       const ni_total = targetUnion.size;
       const val_apriori = (ni_total > 0 && ni_total < n) ? Math.log(ni_total / (n - ni_total)) : 0;
       debug("ni_total: " + ni_total + " val_apriori: " + val_apriori);
+      analysisMeta.val_apriori = val_apriori;
+      analysisMeta.ni_total = ni_total;
 
       const toFinal = (scoreLog) => {
         const v = scoreLog + val_apriori;
@@ -1063,6 +1072,10 @@ exports.get_EpsScrRelation = async function(req, res) {
     const id = uuidv4();
     await redis_client.set(id + "_EpsScrpRel", JSON.stringify(resp_ordenado), { EX: 15 * 60 });
     await redis_client.set(id + "_EpsScrCell", JSON.stringify(resumenPorCelda), { EX: 15 * 60 });
+    const covCellsJson = {};
+    for (const [k, set] of Object.entries(covarCellsUsed)) covCellsJson[k] = [...set];
+    await redis_client.set(id + "_EpsScrCovCells", JSON.stringify(covCellsJson), { EX: 15 * 60 });
+    await redis_client.set(id + "_EpsScrMeta", JSON.stringify(analysisMeta), { EX: 15 * 60 });
 
     // Historial de análisis: solo si hay un usuario autenticado (req.authUser,
     // adjuntado por el middleware attachAuthUser). Un análisis anónimo sigue
@@ -1310,6 +1323,87 @@ exports.get_freq_byrange = async function(req, res) {
 	
   	
 }
+
+
+/**
+ * Detalle de una celda del mapa de Resultados (popup, como el de la v1): valor
+ * de la celda en el mapa, a priori / probabilidad si se usaron, y las
+ * covariables presentes en la celda con su score. Lee lo que getEpsScrRelation
+ * dejó en Redis (expira a los 15 min). Body: { uuid, cell_id }
+ */
+exports.get_EpsScrCellDetail = async function(req, res) {
+  debug("get_EpsScrCellDetail");
+  const uuid = verb_utils.getParam(req, 'uuid');
+  const cell_id = Number(verb_utils.getParam(req, 'cell_id', NaN));
+  if (!uuid || !Number.isFinite(cell_id)) {
+    return res.status(400).json({ error: 'uuid y cell_id requeridos' });
+  }
+  try {
+    const [relRaw, cellRaw, covRaw, metaRaw] = await Promise.all([
+      redis_client.get(uuid + "_EpsScrpRel"),
+      redis_client.get(uuid + "_EpsScrCell"),
+      redis_client.get(uuid + "_EpsScrCovCells"),
+      redis_client.get(uuid + "_EpsScrMeta"),
+    ]);
+    if (!relRaw || !cellRaw || !covRaw) {
+      return res.status(404).json({ error: 'El análisis expiró; vuelve a ejecutarlo para ver el detalle por celda.' });
+    }
+    const rel = JSON.parse(relRaw);
+    const cellRow = JSON.parse(cellRaw).find(c => Number(c.cell) === cell_id) || null;
+    const covCells = JSON.parse(covRaw);
+    const meta = metaRaw ? JSON.parse(metaRaw) : { apriori: false, mapa_prob: false, use_bounded: true };
+
+    const hasCell = Object.create(null);
+    const inCell = (key) => {
+      if (!(key in hasCell)) hasCell[key] = new Set(covCells[key] || []).has(cell_id);
+      return hasCell[key];
+    };
+
+    const covariables = [];
+    for (const r of rel) {
+      if (!inCell(`${r.idsource_covars}:${r.id_covars}`)) continue;
+      // Aporte al valor de la celda en el mapa: score acotado sin a priori
+      // (USE_BOUNDED_FOR_MAP) o el score log con a priori / probabilidad.
+      const aporte = meta.use_bounded
+        ? verb_utils.getScore(r.nj, r.num_nij, r.ni, r.n, { mode: 'bounded', alpha: 0.5 })
+        : r.score;
+      covariables.push({
+        idsource_covars: r.idsource_covars,
+        id_covars: r.id_covars,
+        metadata_covars: r.metadata_covars,
+        metadata_target: r.metadata_target,
+        score: r.score,
+        epsilon: r.epsilon,
+        nij: r.num_nij,
+        nj: r.nj,
+        aporte,
+      });
+    }
+    covariables.sort((a, b) => b.score - a.score);
+
+    const suma_scores = covariables.reduce((acc, c) => acc + (Number(c.score) || 0), 0);
+    let probabilidad = null;
+    if (meta.mapa_prob) {
+      const v = suma_scores + (meta.val_apriori || 0);
+      probabilidad = v <= -700 ? 0 : v >= 700 ? 1 : Math.exp(v) / (1 + Math.exp(v));
+    }
+
+    return res.status(200).json({
+      cell_id,
+      valor_mapa: cellRow ? cellRow.total_score : null,
+      apriori: meta.apriori || meta.mapa_prob ? meta.val_apriori : null,
+      mapa_prob: !!meta.mapa_prob,
+      probabilidad,
+      suma_scores,
+      positivas: covariables.filter(c => c.score >= 0).length,
+      negativas: covariables.filter(c => c.score < 0).length,
+      covariables,
+    });
+  } catch (error) {
+    console.error('Error en get_EpsScrCellDetail:', error.message);
+    return res.status(500).json({ error: 'get_EpsScrCellDetail failed' });
+  }
+};
 
 
 exports.get_EpsScr_bycell = async function(req, res) {
