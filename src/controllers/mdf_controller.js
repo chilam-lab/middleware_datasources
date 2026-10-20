@@ -9,6 +9,7 @@ const redis_client = require('../Utils/redisClient');
 var verb_utils = require('../Utils/verb_utils')
 const db = require('../Utils/db');
 const { getCellsForOwnedCollection, getCollectionContext } = require('../Utils/terceros_utils');
+const { runValidation } = require('../Utils/validation');
 
 console.log("*** host species: " + config.server_species.host)
 console.log("*** host snib: " + config.server_snib.host)
@@ -792,6 +793,8 @@ exports.get_EpsScrRelation = async function(req, res) {
   const min_nj      = Math.max(0, parseInt(verb_utils.getParam(req, 'min_nj', 0), 10) || 0);
   const apriori     = verb_utils.getParam(req, 'apriori', false) === true;
   const mapa_prob   = verb_utils.getParam(req, 'mapa_prob', false) === true;
+  // Validación cruzada (k-fold) del modelo: número de iteraciones; 0 = sin validación.
+  const validation_iterations = Math.max(0, Math.min(10, parseInt(verb_utils.getParam(req, 'validation_iterations', 0), 10) || 0));
   // Filtros del target (fecha, sin fecha, fósiles): solo aplican al target.
   const target_filters = buildTargetFilters(verb_utils.getParam(req, 'target_filters', null));
   // Celdas que el usuario borró del mapa de Target: se quitan de la región
@@ -1077,6 +1080,27 @@ exports.get_EpsScrRelation = async function(req, res) {
     await redis_client.set(id + "_EpsScrCovCells", JSON.stringify(covCellsJson), { EX: 15 * 60 });
     await redis_client.set(id + "_EpsScrMeta", JSON.stringify(analysisMeta), { EX: 15 * 60 });
 
+    // Validación: se calcula sobre los mismos datos ya cargados (sin volver a
+    // consultar las fuentes) y queda en Redis para getEpsScrValidation.
+    let validation = null;
+    if (validation_iterations >= 2) {
+      const t0 = Date.now();
+      validation = runValidation({
+        targetItems: targetCells_data.flatMap(o => (o.data || []).map(it => ({ cells: Array.isArray(it.cells) ? it.cells : [] }))),
+        covarItems: covarItems.map(c => ({ key: `${c.obj2.id_source}:${c.id_covars}`, cells: c.covarCellsSet })),
+        regionCells: regionCellsSet || new Set(),
+        n,
+        iterations: validation_iterations,
+        min_occ: Number(min_occ) || 0,
+        min_nj,
+        useApriori,
+        mapaProb: mapa_prob,
+        useBounded: !useApriori && USE_BOUNDED_FOR_MAP,
+      });
+      debug(`validación (${validation_iterations} iteraciones) en ${Date.now() - t0} ms`);
+      await redis_client.set(id + "_EpsScrValidation", JSON.stringify(validation), { EX: 15 * 60 });
+    }
+
     // Historial de análisis: solo si hay un usuario autenticado (req.authUser,
     // adjuntado por el middleware attachAuthUser). Un análisis anónimo sigue
     // funcionando igual que antes, simplemente no se persiste su config.
@@ -1097,6 +1121,7 @@ exports.get_EpsScrRelation = async function(req, res) {
       EpsScrpRel: resp_ordenado,     // tabla de pares target-covar
       EpsScrCell: resumenPorCelda,   // score acumulado por celda
       scoreDeciles,                  // ⬅️ promedio de score por celda en cada decil
+      validation,                    // recall por decil (null sin validación)
       uuid: id
     });
 
@@ -1331,6 +1356,20 @@ exports.get_freq_byrange = async function(req, res) {
  * covariables presentes en la celda con su score. Lee lo que getEpsScrRelation
  * dejó en Redis (expira a los 15 min). Body: { uuid, cell_id }
  */
+/** Resultado de la validación de un análisis (recall por decil), si se pidió. */
+exports.get_EpsScrValidation = async function(req, res) {
+  const uuid = verb_utils.getParam(req, 'uuid');
+  if (!uuid) return res.status(400).json({ error: 'uuid requerido' });
+  try {
+    const raw = await redis_client.get(uuid + "_EpsScrValidation");
+    if (!raw) return res.status(404).json({ error: 'Sin validación para este análisis (no se pidió o ya expiró).' });
+    return res.status(200).json(JSON.parse(raw));
+  } catch (error) {
+    console.error('Error en get_EpsScrValidation:', error.message);
+    return res.status(500).json({ error: 'get_EpsScrValidation failed' });
+  }
+};
+
 exports.get_EpsScrCellDetail = async function(req, res) {
   debug("get_EpsScrCellDetail");
   const uuid = verb_utils.getParam(req, 'uuid');
