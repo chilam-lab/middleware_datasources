@@ -174,7 +174,12 @@ exports.getTaxonFromString = async function(req, res) {
       }
   };
 
-  let query = variable + " = " + taxon_string
+  // Sin texto: lista el primer nivel completo (lo usa el selector para
+  // precargar fuentes de capas con una sola opción). WorldClim lo hace con
+  // q vacío; DEM ya responde su fuente con "elevation_q10 = " y con q vacío
+  // devolvería los rangos.
+  const vacio = String(taxon_string ?? '').trim() === ''
+  let query = (vacio && Number(source_id) !== 4) ? '' : variable + " = " + taxon_string
 
   // match: 'prefix' → las fuentes buscan también el nivel especie por inicio
   // ("lyn" → Lynx rufus); sin esto, especie compara exacto y nunca hay
