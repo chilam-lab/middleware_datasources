@@ -577,6 +577,63 @@ exports.getCellOccurrences = async function(req, res) {
   }
 }
 
+/**
+ * Todos los registros del target con coordenadas, para descargarlos en
+ * GeoJSON/CSV desde el mapa de Resultados (como la versión estable). Recibe
+ * target/target_filters/excluded_cells tal cual el payload de
+ * getEpsScrRelation y devuelve solo los registros que caen en celdas de la
+ * región fuera de las borradas, es decir, los mismos que cuentan en ni.
+ * Las colecciones propias (terceros) no tienen registros individuales.
+ * Body: { grid_id, target, target_filters, excluded_cells }
+ */
+exports.getTargetOccurrences = async function(req, res) {
+  debug("getTargetOccurrences")
+
+  const grid_id = Number(verb_utils.getParam(req, 'grid_id', 0))
+  const target_body = verb_utils.getParam(req, 'target', [])
+  const target_filters = buildTargetFilters(verb_utils.getParam(req, 'target_filters', null))
+  const excluded_raw = verb_utils.getParam(req, 'excluded_cells', [])
+  const excluded = new Set((Array.isArray(excluded_raw) ? excluded_raw : []).map(Number))
+
+  const target = (Array.isArray(target_body) ? target_body : []).filter(i => i && i.id_source !== 'terceros')
+  const terceros_omitidos = Array.isArray(target_body) && target.length < target_body.length
+  if (!grid_id || target.length === 0) {
+    return res.status(400).json({ error: 'Se requieren grid_id y target (de SNIB o GBIF)' })
+  }
+
+  const axiosCfg = { headers: { 'Content-Type': 'application/json' }, maxContentLength: Infinity, maxBodyLength: Infinity }
+  try {
+    const ids_array = await getSourceIds(target)
+    let truncated = false
+    let data = []
+    for (const item of ids_array) {
+      const fuente = sourcesDict[item.id_source]
+      // /<prefijo>/get-data/<id> -> /<prefijo>/get-occ (solo SNIB/GBIF lo tienen).
+      const urlOcc = String(fuente?.url_data || '').replace(/\/get-data\/[^/]+$/, '/get-occ')
+      const levels_id = (item.id_array || []).map(Number).filter(Number.isFinite)
+      if (!urlOcc || urlOcc === fuente?.url_data || levels_id.length === 0) continue
+      const resp = await axios.post(urlOcc, {
+        grid_id, levels_id,
+        filter_names: target_filters.filter_names,
+        filter_values: target_filters.filter_values,
+      }, axiosCfg)
+      truncated = truncated || !!resp.data?.truncated
+      data = data.concat(resp.data?.data || [])
+    }
+
+    let regionCells = null
+    try { regionCells = (await getGridLength(grid_id)).regionCellsSet } catch (e) { regionCells = null }
+    data = data.filter(r => {
+      const c = Number(r.celda)
+      return !excluded.has(c) && (!regionCells || regionCells.has(c))
+    })
+    return res.status(200).json({ truncated, terceros_omitidos, data })
+  } catch (error) {
+    console.error('❌ Error en getTargetOccurrences:', error?.response?.data || error.message)
+    return res.status(500).json({ error: 'Error al obtener los registros del target' })
+  }
+}
+
 exports.getOccMapaAnalisisNicho = async function(req, res) {
 
 	debug("getOccMapaAnalisisNicho")

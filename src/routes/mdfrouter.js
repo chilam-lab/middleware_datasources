@@ -62,6 +62,9 @@ router.route('/getOccOnMap')
 router.route('/getCellOccurrences')
   .post(mdfCtrl.getCellOccurrences)
 
+router.route('/getTargetOccurrences')
+  .post(mdfCtrl.getTargetOccurrences)
+
 router.route('/getGeoJsonbyGridid')
   .get(mdfCtrl.getGeoJsonbyGridid)
   .post(mdfCtrl.getGeoJsonbyGridid)
