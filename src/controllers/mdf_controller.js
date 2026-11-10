@@ -16,6 +16,11 @@ console.log("*** host snib: " + config.server_snib.host)
 
 let sourcesDict = {};
 
+// Fuentes de capas con selector de un solo elemento y endpoint /secuencia propio
+// (DEM = 4, uso de suelo = 5): su primer nivel se pide con "<variable> = " y el
+// navegador delega la transición al middleware de la fuente.
+const SECUENCIA_SOURCES = [4, 5];
+
 async function loadSourcesDict() {
   const rows = await db.any(
     'SELECT * FROM mdf_data_sources WHERE activo = TRUE ORDER BY id_source'
@@ -176,10 +181,10 @@ exports.getTaxonFromString = async function(req, res) {
 
   // Sin texto: lista el primer nivel completo (lo usa el selector para
   // precargar fuentes de capas con una sola opción). WorldClim lo hace con
-  // q vacío; DEM ya responde su fuente con "elevation_q10 = " y con q vacío
-  // devolvería los rangos.
+  // q vacío; DEM y uso de suelo ya responden su fuente con "<variable> = " y
+  // con q vacío devolverían los rangos/clases.
   const vacio = String(taxon_string ?? '').trim() === ''
-  let query = (vacio && Number(source_id) !== 4) ? '' : variable + " = " + taxon_string
+  let query = (vacio && !SECUENCIA_SOURCES.includes(Number(source_id))) ? '' : variable + " = " + taxon_string
 
   // match: 'prefix' → las fuentes buscan también el nivel especie por inicio
   // ("lyn" → Lynx rufus); sin esto, especie compara exacto y nunca hay
@@ -248,9 +253,9 @@ exports.getTaxonChildren = async function(req, res) {
       }
   };
 
-	// Caso DEM (source_id=4): delega al endpoint secuencia del middleware DEM.
-	// Soporta la transición elevation_q<n> → categoria (bins de elevación).
-	if (Number(source_id) === 4) {
+	// Casos DEM (4) y uso de suelo (5): delega al endpoint secuencia de su middleware
+	// (elevation_q<n> → categoria, usv_<serie> → clase_usv).
+	if (SECUENCIA_SOURCES.includes(Number(source_id))) {
 		try {
 			const body = {
 				variableLevel: parentLevel,
@@ -266,8 +271,8 @@ exports.getTaxonChildren = async function(req, res) {
 			}));
 			return res.status(200).json(items);
 		} catch (error) {
-			console.error(`❌ Error en DEM secuencia (${fuente.url_secuencia}):`, error.message);
-			return res.status(500).json({ error: 'Error al obtener categorías DEM desde secuencia' });
+			console.error(`❌ Error en secuencia de la fuente ${source_id} (${fuente.url_secuencia}):`, error.message);
+			return res.status(500).json({ error: 'Error al obtener categorías desde secuencia' });
 		}
 	}
 

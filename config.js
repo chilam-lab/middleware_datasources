@@ -49,6 +49,9 @@ const config = {
   server_dem: {
     host: process.env.DEM_HOST
   },
+  server_usosuelo: {
+    host: process.env.USOSUELO_HOST
+  },
   authBaseUrl: process.env.AUTH_BACKEND_URL,
   mesh_db: {
     host:     process.env.MESH_DB_HOST,
