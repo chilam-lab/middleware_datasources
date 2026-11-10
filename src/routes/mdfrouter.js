@@ -75,6 +75,21 @@ router.route('/getEpsScrRelation')
   .post(attachAuthUser, mdfCtrl.get_EpsScrRelation)
 
 
+// Redes de inferencia (análisis de comunidad)
+router.route('/getNetRelation')
+  .post(attachAuthUser, mdfCtrl.get_NetRelation)
+
+router.route('/getNetEdges')
+  .post(mdfCtrl.get_NetEdges)
+
+router.route('/getNetCells')
+  .post(mdfCtrl.get_NetCells)
+
+router.route('/getNetCsv')
+  .get(mdfCtrl.get_NetCsv)
+  .post(mdfCtrl.get_NetCsv)
+
+
 router.route('/getAnalysisHistory')
   .get(requireAuthUser, mdfCtrl.get_analysis_history)
   .post(requireAuthUser, mdfCtrl.get_analysis_history)

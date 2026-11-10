@@ -10,6 +10,7 @@ var verb_utils = require('../Utils/verb_utils')
 const db = require('../Utils/db');
 const { getCellsForOwnedCollection, getCollectionContext } = require('../Utils/terceros_utils');
 const { runValidation, fullModelRecall } = require('../Utils/validation');
+const net_utils = require('../Utils/net_utils');
 
 console.log("*** host species: " + config.server_species.host)
 console.log("*** host snib: " + config.server_snib.host)
@@ -1828,3 +1829,175 @@ async function getGridLength(grid_id){
 	return { n: grid_length, regionCellsSet }
 
 }
+
+
+// ===================== Redes de inferencia (análisis de comunidad) =====================
+// Equivalente v2 de getTaxonsGroupNodes/getTaxonsGroupEdges de la versión estable:
+// aristas nodo fuente → nodo destino con ε/score de la v1, para todas las fuentes
+// (SNIB o GBIF, capas y colecciones propias). El resultado queda en Redis por uuid;
+// getNetEdges / getNetCells / getNetCsv lo consultan sin recalcular.
+
+const NET_TTL_SECONDS = 60 * 60;
+const SNIB_SOURCE = 1;
+const GBIF_SOURCE = 3;
+// Fuentes taxonómicas: las únicas que aceptan los filtros de fecha y fósiles.
+const TAXONOMY_SOURCES = [SNIB_SOURCE, GBIF_SOURCE];
+
+/** Celdas de un grupo (fuente o destino) en la malla, con sus filtros de fecha/fósiles. */
+async function getNetGroupCells(items, grid_id, filters, authUser) {
+  const list = Array.isArray(items) ? items : [];
+  const terceros = list.filter(i => i && i.id_source === 'terceros');
+  const taxonomy = list.filter(i => i && TAXONOMY_SOURCES.includes(Number(i.id_source)));
+  const layers = list.filter(i => i && i.id_source !== 'terceros' && !TAXONOMY_SOURCES.includes(Number(i.id_source)));
+  return [
+    ...(await getDataInterccion(await getSourceIds(taxonomy), grid_id, filters)),
+    ...(await getDataInterccion(await getSourceIds(layers), grid_id)),
+    ...(await getThirdPartyCellsData(terceros, grid_id, authUser)),
+  ];
+}
+
+/** Nodos sin celdas (para respuesta y Redis); celdas = cuántas tiene. */
+const netNodeSummary = (node) => ({
+  id: node.id, grupo: node.grupo, id_source: node.id_source, level_id: node.level_id,
+  label: node.label, metadata: node.metadata, celdas: node.cells.size,
+});
+
+const netNumber = (v, def) => (Number.isFinite(Number(v)) ? Number(v) : def);
+
+exports.get_NetRelation = async function(req, res) {
+  debug("get_NetRelation");
+
+  const grid_id = verb_utils.getParam(req, 'grid_id', 1);
+  const min_occ = Math.max(0, parseInt(verb_utils.getParam(req, 'min_occ', 5), 10) || 0);
+  const source_body = verb_utils.getParam(req, 'source', []);
+  const target_body = verb_utils.getParam(req, 'target', []);
+  const source_filters = buildTargetFilters(verb_utils.getParam(req, 'source_filters', null));
+  const target_filters = buildTargetFilters(verb_utils.getParam(req, 'target_filters', null));
+  const min_abs_eps = Math.max(0, netNumber(verb_utils.getParam(req, 'min_abs_eps', 2), 2));
+  const limit = Math.min(100000, Math.max(1, parseInt(verb_utils.getParam(req, 'limit', 20000), 10) || 20000));
+
+  if (!Array.isArray(source_body) || !source_body.length || !Array.isArray(target_body) || !target_body.length) {
+    return res.status(400).json({ error: 'Se requieren nodos fuente y nodos destino', codigo: 'sin_grupos' });
+  }
+  // SNIB y GBIF no se combinan: uno es subconjunto del otro y las relaciones entre ellos no significan nada.
+  const usados = new Set([...source_body, ...target_body].map(i => Number(i && i.id_source)));
+  if (usados.has(SNIB_SOURCE) && usados.has(GBIF_SOURCE)) {
+    return res.status(400).json({ error: 'No se pueden combinar SNIB y GBIF en el mismo análisis', codigo: 'snib_gbif' });
+  }
+
+  try {
+    const t0 = Date.now();
+    const grid = await getGridLength(grid_id);
+    const n = grid.n;
+    if (!(n > 0)) return res.status(400).json({ error: 'Malla sin celdas en la región', codigo: 'malla' });
+
+    const [sourceData, targetData] = await Promise.all([
+      getNetGroupCells(source_body, grid_id, source_filters, req.authUser),
+      getNetGroupCells(target_body, grid_id, target_filters, req.authUser),
+    ]);
+    const sources = net_utils.buildNodes(sourceData, 'fuente', grid.regionCellsSet);
+    const targets = net_utils.buildNodes(targetData, 'destino', grid.regionCellsSet);
+    const tCells = Date.now();
+
+    const { edges, stats } = net_utils.computeEdges(sources, targets, n, min_occ);
+    const tEdges = Date.now();
+
+    const nodes = [...sources, ...targets];
+    const nodesSummary = nodes.map(netNodeSummary);
+    const cellsById = Object.fromEntries(nodes.map(nd => [nd.id, [...nd.cells]]));
+    const meta = {
+      grid_id, n, min_occ, min_abs_eps,
+      source: source_body, target: target_body,
+      source_filters: verb_utils.getParam(req, 'source_filters', null),
+      target_filters: verb_utils.getParam(req, 'target_filters', null),
+      stats,
+      tiempos_ms: { celdas: tCells - t0, aristas: tEdges - tCells },
+    };
+
+    const uuid = uuidv4();
+    await Promise.all([
+      redis_client.set(uuid + "_Net", JSON.stringify({ meta, nodes: nodesSummary }), { EX: NET_TTL_SECONDS }),
+      redis_client.set(uuid + "_NetEdges", JSON.stringify(edges), { EX: NET_TTL_SECONDS }),
+      redis_client.set(uuid + "_NetCells", JSON.stringify(cellsById), { EX: NET_TTL_SECONDS }),
+    ]);
+
+    const filtered = net_utils.filterEdges(edges, { minAbsEps: min_abs_eps, limit });
+    debug(`get_NetRelation: ${sources.length} fuentes × ${stats.destinos_validos} destinos = ${stats.pares} pares, `
+      + `${edges.length} guardadas, ${filtered.total} con |ε| ≥ ${min_abs_eps} (${tEdges - t0} ms)`);
+
+    res.status(200).json({
+      uuid, grid_id, n, min_occ, min_abs_eps,
+      nodes: nodesSummary,
+      edges: filtered.edges,
+      total_edges: filtered.total,
+      stats,
+      tiempos_ms: meta.tiempos_ms,
+    });
+  } catch (error) {
+    console.error('❌ Error en get_NetRelation:', error.message);
+    res.status(500).json({ error: 'Error al calcular la red' });
+  }
+};
+
+/** Aristas de un análisis ya calculado, con otro umbral de |ε|, signo o página. */
+exports.get_NetEdges = async function(req, res) {
+  const uuid = verb_utils.getParam(req, 'uuid', null);
+  if (!uuid) return res.status(400).json({ error: 'Falta uuid' });
+  try {
+    const raw = await redis_client.get(uuid + "_NetEdges");
+    if (!raw) return res.status(404).json({ error: 'El análisis expiró; vuelve a generarlo', codigo: 'expirado' });
+    const result = net_utils.filterEdges(JSON.parse(raw), {
+      minAbsEps: Math.max(0, netNumber(verb_utils.getParam(req, 'min_abs_eps', 2), 2)),
+      signo: ['positivo', 'negativo'].includes(verb_utils.getParam(req, 'signo', 'ambos')) ? verb_utils.getParam(req, 'signo') : 'ambos',
+      limit: Math.min(100000, Math.max(1, parseInt(verb_utils.getParam(req, 'limit', 20000), 10) || 20000)),
+      offset: Math.max(0, parseInt(verb_utils.getParam(req, 'offset', 0), 10) || 0),
+    });
+    res.status(200).json({ uuid, total_edges: result.total, edges: result.edges });
+  } catch (error) {
+    console.error('❌ Error en get_NetEdges:', error.message);
+    res.status(500).json({ error: 'Error al obtener aristas' });
+  }
+};
+
+/** Celdas de uno o más nodos (mapa) y, con dos nodos, las que comparten (arista). */
+exports.get_NetCells = async function(req, res) {
+  const uuid = verb_utils.getParam(req, 'uuid', null);
+  const ids = verb_utils.getParam(req, 'nodes', []);
+  if (!uuid || !Array.isArray(ids) || ids.length === 0 || ids.length > 50) {
+    return res.status(400).json({ error: 'Se requieren uuid y de 1 a 50 nodos' });
+  }
+  try {
+    const raw = await redis_client.get(uuid + "_NetCells");
+    if (!raw) return res.status(404).json({ error: 'El análisis expiró; vuelve a generarlo', codigo: 'expirado' });
+    const all = JSON.parse(raw);
+    const cells = Object.fromEntries(ids.filter(id => all[id]).map(id => [id, all[id]]));
+    let interseccion = null;
+    if (ids.length === 2 && all[ids[0]] && all[ids[1]]) {
+      const b = new Set(all[ids[1]]);
+      interseccion = all[ids[0]].filter(c => b.has(c));
+    }
+    res.status(200).json({ uuid, cells, interseccion });
+  } catch (error) {
+    console.error('❌ Error en get_NetCells:', error.message);
+    res.status(500).json({ error: 'Error al obtener celdas' });
+  }
+};
+
+/** CSV de aristas (todas las guardadas o las que pasan min_abs_eps). */
+exports.get_NetCsv = async function(req, res) {
+  const uuid = verb_utils.getParam(req, 'uuid', null);
+  if (!uuid) return res.status(400).json({ error: 'Falta uuid' });
+  try {
+    const [rawNet, rawEdges] = await Promise.all([redis_client.get(uuid + "_Net"), redis_client.get(uuid + "_NetEdges")]);
+    if (!rawNet || !rawEdges) return res.status(404).json({ error: 'El análisis expiró; vuelve a generarlo', codigo: 'expirado' });
+    const nodesById = Object.fromEntries(JSON.parse(rawNet).nodes.map(nd => [nd.id, nd]));
+    const minAbsEps = Math.max(0, netNumber(verb_utils.getParam(req, 'min_abs_eps', 0), 0));
+    const { edges } = net_utils.filterEdges(JSON.parse(rawEdges), { minAbsEps, limit: net_utils.MAX_STORED_EDGES });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="red_${uuid.slice(0, 8)}.csv"`);
+    res.status(200).send(net_utils.edgesToCsv(edges, nodesById));
+  } catch (error) {
+    console.error('❌ Error en get_NetCsv:', error.message);
+    res.status(500).json({ error: 'Error al generar el CSV' });
+  }
+};
