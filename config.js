@@ -53,6 +53,17 @@ const config = {
     host: process.env.USOSUELO_HOST
   },
   authBaseUrl: process.env.AUTH_BACKEND_URL,
+  // Datos de usuarios (historial de análisis y colecciones propias). Por omisión,
+  // mismo servidor y usuario que mesh_db con la base species_users_db.
+  users_db: {
+    host:     process.env.USERS_DB_HOST || process.env.MESH_DB_HOST,
+    port:     process.env.USERS_DB_PORT || process.env.MESH_DB_PORT,
+    database: process.env.USERS_DB_NAME || 'species_users_db',
+    user:     process.env.USERS_DB_USER || process.env.MESH_DB_USER,
+    password: process.env.USERS_DB_PWD || process.env.MESH_DB_PWD,
+    application_name: 'DataSources_Middleware_Users',
+    poolSize: 10,
+  },
   mesh_db: {
     host:     process.env.MESH_DB_HOST,
     port:     process.env.MESH_DB_PORT,

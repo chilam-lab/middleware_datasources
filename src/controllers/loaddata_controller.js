@@ -19,6 +19,7 @@ var debug = require('debug')('verbs:loaddata')
 var moment = require('moment')
 var verb_utils = require('../Utils/verb_utils')
 const db = require('../Utils/db');
+const { usersDb } = db;
 const { getCellsForOwnedCollection } = require('../Utils/terceros_utils');
 
 var CHAR_FORMAT = /[`!@#$%^&*()+\=\[\]{};'"\\|,<>\?~]/; // se aceptan espacios, guiones, puntos, dos puntos y diagonales
@@ -30,20 +31,24 @@ var CHAR_FORMAT = /[`!@#$%^&*()+\=\[\]{};'"\\|,<>\?~]/; // se aceptan espacios, 
 // en metadata.
 var LEGACY_TAXON_FIELDS = ['scientificname', 'kingdom', 'phylum', 'class', 'order', 'family', 'genus', 'species', 'taxonrank'];
 
+// Celdas de cada punto en las mallas (meshandregions_db), en una sola consulta
+// para toda la colección. Las colecciones viven en species_users_db, así que el
+// cruce ya no puede ir dentro del INSERT como cuando estaban en la misma base.
+const GRID_COLUMNS = ['64km', '32km', '16km', '8km', 'ageb', 'cue', 'mun', 'state'];
+const CELLS_QUERY = `
+SELECT p.i,
+${GRID_COLUMNS.map((g) => `  (SELECT gridid_${g} FROM grid_${g}_aoi WHERE ST_Intersects(p.geom, the_geom) LIMIT 1) AS gridid_${g}`).join(',\n')}
+FROM (
+  SELECT i, ST_SetSRID(ST_Point(lon, lat), 4326) AS geom
+  FROM unnest($1::float8[], $2::float8[]) WITH ORDINALITY AS u(lon, lat, i)
+) p
+ORDER BY p.i
+`;
+
 const INSERT_OCC_QUERY = `
 WITH occ_terceros_result AS (
-  INSERT INTO occ_terceros (id_externo, latitud, longitud, idlista, gridid_64km, gridid_32km, gridid_16km, gridid_8km, gridid_ageb, gridid_cue, gridid_mun, gridid_state)
-  VALUES (
-    $1, $2, $3, $4,
-    (SELECT gridid_64km FROM grid_64km_aoi WHERE ST_Intersects(ST_SetSRID(ST_Point($3, $2), 4326), the_geom) LIMIT 1),
-    (SELECT gridid_32km FROM grid_32km_aoi WHERE ST_Intersects(ST_SetSRID(ST_Point($3, $2), 4326), the_geom) LIMIT 1),
-    (SELECT gridid_16km FROM grid_16km_aoi WHERE ST_Intersects(ST_SetSRID(ST_Point($3, $2), 4326), the_geom) LIMIT 1),
-    (SELECT gridid_8km FROM grid_8km_aoi WHERE ST_Intersects(ST_SetSRID(ST_Point($3, $2), 4326), the_geom) LIMIT 1),
-    (SELECT gridid_ageb FROM grid_ageb_aoi WHERE ST_Intersects(ST_SetSRID(ST_Point($3, $2), 4326), the_geom) LIMIT 1),
-    (SELECT gridid_cue FROM grid_cue_aoi WHERE ST_Intersects(ST_SetSRID(ST_Point($3, $2), 4326), the_geom) LIMIT 1),
-    (SELECT gridid_mun FROM grid_mun_aoi WHERE ST_Intersects(ST_SetSRID(ST_Point($3, $2), 4326), the_geom) LIMIT 1),
-    (SELECT gridid_state FROM grid_state_aoi WHERE ST_Intersects(ST_SetSRID(ST_Point($3, $2), 4326), the_geom) LIMIT 1)
-  )
+  INSERT INTO occ_terceros (id_externo, latitud, longitud, idlista, ${GRID_COLUMNS.map((g) => `gridid_${g}`).join(', ')})
+  VALUES ($1, $2, $3, $4, $16, $17, $18, $19, $20, $21, $22, $23)
   RETURNING id
 )
 INSERT INTO detalle_occ_terceros (idocc, fechaevento, nombrecientifico, reino, phylum, clase, orden, familia, genero, especie, niveltaxonomico, metadata)
@@ -106,7 +111,12 @@ exports.loadOccDataGroup = async function (req, res) {
   }
 
   try {
-    const idinsertdata = await db.tx(async t => {
+    const cells = await db.any(CELLS_QUERY, [
+      json_data.map((item) => Number(item.decimallongitude)),
+      json_data.map((item) => Number(item.decimallatitude)),
+    ]);
+
+    const idinsertdata = await usersDb.tx(async t => {
 
       const header = await t.one(
         `INSERT INTO lista_carga_terceros (userid, nombre_datos, estatus, categoria, fecha_carga, fecha_expiracion, tipo_info)
@@ -115,9 +125,10 @@ exports.loadOccDataGroup = async function (req, res) {
         [req.authUser.userid, nombre_coleccion, 'activo', 'carga_datos_tercero', 'biotico']
       );
 
-      for (const item of json_data) {
+      for (const [index, item] of json_data.entries()) {
         const metadata = (item.metadata && typeof item.metadata === 'object') ? item.metadata : {};
         const legacy = LEGACY_TAXON_FIELDS.map((field) => item[field] || metadata[field] || '');
+        const cell = cells[index] || {};
 
         await t.none(INSERT_OCC_QUERY, [
           item.occurrenceid,
@@ -127,6 +138,7 @@ exports.loadOccDataGroup = async function (req, res) {
           item.eventdate || null,
           ...legacy,
           JSON.stringify(metadata),
+          ...GRID_COLUMNS.map((g) => cell[`gridid_${g}`] ?? null),
         ]);
       }
 
@@ -145,7 +157,7 @@ exports.getProfileDataList = async function (req, res) {
   debug("getProfileDataList");
 
   try {
-    const rows = await db.any(
+    const rows = await usersDb.any(
       'SELECT * FROM lista_carga_terceros WHERE userid = $1 ORDER BY fecha_carga DESC',
       [req.authUser.userid]
     );
@@ -162,7 +174,7 @@ exports.getLoadedDataById = async function (req, res) {
   const id_data = verb_utils.getParam(req, 'id_data');
 
   try {
-    const header = await db.oneOrNone(
+    const header = await usersDb.oneOrNone(
       'SELECT * FROM lista_carga_terceros WHERE id = $1 AND userid = $2',
       [id_data, req.authUser.userid]
     );
@@ -171,7 +183,7 @@ exports.getLoadedDataById = async function (req, res) {
       return res.status(404).json({ status: 1, message: 'No encontrado' });
     }
 
-    const rows = await db.any(
+    const rows = await usersDb.any(
       `SELECT o.*, d.fechaevento, d.nombrecientifico, d.reino, d.phylum, d.clase, d.orden, d.familia, d.genero, d.especie, d.niveltaxonomico, d.metadata
        FROM occ_terceros o
        LEFT JOIN detalle_occ_terceros d ON d.idocc = o.id
@@ -230,7 +242,7 @@ exports.deleteLoadedData = async function (req, res) {
   }
 
   try {
-    const result = await db.result(
+    const result = await usersDb.result(
       'DELETE FROM lista_carga_terceros WHERE id = $1 AND userid = $2',
       [id_data, req.authUser.userid]
     );

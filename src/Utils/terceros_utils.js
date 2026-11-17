@@ -8,6 +8,7 @@
  * solo se resuelve qué columna corresponde al grid_id elegido en el wizard.
  */
 const db = require('./db');
+const { usersDb } = db;
 
 const RESOLUTION_COLUMN = {
   '64km': 'gridid_64km',
@@ -38,7 +39,7 @@ async function resolveColumnForGrid(grid_id) {
 async function getCellsForOwnedCollection(id_data, grid_id, userid) {
   if (!userid) return null;
 
-  const header = await db.oneOrNone(
+  const header = await usersDb.oneOrNone(
     'SELECT id, nombre_datos FROM lista_carga_terceros WHERE id = $1 AND userid = $2',
     [id_data, userid]
   );
@@ -47,7 +48,7 @@ async function getCellsForOwnedCollection(id_data, grid_id, userid) {
   const column = await resolveColumnForGrid(grid_id);
   if (!column) return { header, column: null, rows: [] };
 
-  const rows = await db.any(
+  const rows = await usersDb.any(
     `SELECT ${column} AS cell_id, COUNT(*) AS occ
      FROM occ_terceros
      WHERE idlista = $1 AND ${column} IS NOT NULL
@@ -76,7 +77,7 @@ const MAX_CONTEXT_VALUES = 3;
  * distintos (hasta MAX_CONTEXT_VALUES, con "(+N)" si hay más).
  */
 async function getCollectionContext(id_data) {
-  const rows = await db.any(
+  const rows = await usersDb.any(
     `SELECT e.key AS k,
             COUNT(DISTINCT e.value) AS distintos,
             (ARRAY_AGG(DISTINCT e.value ORDER BY e.value))[1:$2] AS valores
@@ -87,7 +88,7 @@ async function getCollectionContext(id_data) {
      GROUP BY e.key`,
     [id_data, MAX_CONTEXT_VALUES]
   );
-  const total = await db.one('SELECT COUNT(*)::int AS n FROM occ_terceros WHERE idlista = $1', [id_data]);
+  const total = await usersDb.one('SELECT COUNT(*)::int AS n FROM occ_terceros WHERE idlista = $1', [id_data]);
 
   const rank = (k) => {
     const i = CONTEXT_KEY_ORDER.indexOf(k.toLowerCase());

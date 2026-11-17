@@ -8,6 +8,7 @@ const d3 = require('d3')
 const redis_client = require('../Utils/redisClient');
 var verb_utils = require('../Utils/verb_utils')
 const db = require('../Utils/db');
+const { usersDb } = db;
 const { getCellsForOwnedCollection, getCollectionContext } = require('../Utils/terceros_utils');
 const { runValidation, fullModelRecall } = require('../Utils/validation');
 const net_utils = require('../Utils/net_utils');
@@ -1188,7 +1189,7 @@ exports.get_EpsScrRelation = async function(req, res) {
       // que decodificar el payload crudo. Se guarda aparte, no forma parte del
       // payload que se reenvía tal cual al re-ejecutar.
       const { sessionid, meta, ...analysisPayload } = req.body || {};
-      db.none(
+      usersDb.none(
         'INSERT INTO analisis_historial (userid, uuid_redis, grid_id, min_occ, payload, meta) VALUES ($1, $2, $3, $4, $5, $6)',
         [req.authUser.userid, id, grid_id, min_occ, analysisPayload, meta || null]
       ).catch(err => debug('No se pudo guardar historial de análisis: ' + (err.message || err)));
@@ -1219,7 +1220,7 @@ exports.get_analysis_history = async function(req, res) {
   debug("get_analysis_history");
 
   try {
-    const rows = await db.any(
+    const rows = await usersDb.any(
       'SELECT id, uuid_redis, grid_id, min_occ, payload, meta, fecha_creacion FROM analisis_historial WHERE userid = $1 ORDER BY fecha_creacion DESC LIMIT 50',
       [req.authUser.userid]
     );
@@ -1245,7 +1246,7 @@ exports.delete_analysis_history = async function(req, res) {
   }
 
   try {
-    const result = await db.result(
+    const result = await usersDb.result(
       'DELETE FROM analisis_historial WHERE id = $1 AND userid = $2',
       [id, req.authUser.userid]
     );
@@ -1925,7 +1926,7 @@ exports.get_NetRelation = async function(req, res) {
     // que Mi cuenta lo distinga y "Re-ejecutar" vuelva al asistente de Redes.
     if (req.authUser) {
       const { sessionid, meta: clientMeta, ...netPayload } = req.body || {};
-      db.none(
+      usersDb.none(
         'INSERT INTO analisis_historial (userid, uuid_redis, grid_id, min_occ, payload, meta) VALUES ($1, $2, $3, $4, $5, $6)',
         [req.authUser.userid, uuid, grid_id, min_occ, { ...netPayload, tipo: 'redes' }, { ...(clientMeta || {}), tipo: 'redes' }]
       ).catch(err => debug('No se pudo guardar la red en el historial: ' + (err.message || err)));

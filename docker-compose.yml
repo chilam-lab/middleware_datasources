@@ -42,6 +42,12 @@ services:
       MESH_DB_NAME: ${MESH_DB_NAME}
       MESH_DB_USER: ${MESH_DB_USER}
       MESH_DB_PWD: ${MESH_DB_PWD}
+      # Opcionales: por omisión, mismo servidor/usuario que MESH_DB_* con la base species_users_db.
+      USERS_DB_HOST: ${USERS_DB_HOST:-}
+      USERS_DB_PORT: ${USERS_DB_PORT:-}
+      USERS_DB_NAME: ${USERS_DB_NAME:-}
+      USERS_DB_USER: ${USERS_DB_USER:-}
+      USERS_DB_PWD: ${USERS_DB_PWD:-}
 
       # Redis (clave)
       REDIS_HOST: redis
