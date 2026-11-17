@@ -1921,6 +1921,16 @@ exports.get_NetRelation = async function(req, res) {
       redis_client.set(uuid + "_NetCells", JSON.stringify(cellsById), { EX: NET_TTL_SECONDS }),
     ]);
 
+    // Historial (solo con sesión): mismo registro que Nicho, marcado como red para
+    // que Mi cuenta lo distinga y "Re-ejecutar" vuelva al asistente de Redes.
+    if (req.authUser) {
+      const { sessionid, meta: clientMeta, ...netPayload } = req.body || {};
+      db.none(
+        'INSERT INTO analisis_historial (userid, uuid_redis, grid_id, min_occ, payload, meta) VALUES ($1, $2, $3, $4, $5, $6)',
+        [req.authUser.userid, uuid, grid_id, min_occ, { ...netPayload, tipo: 'redes' }, { ...(clientMeta || {}), tipo: 'redes' }]
+      ).catch(err => debug('No se pudo guardar la red en el historial: ' + (err.message || err)));
+    }
+
     const filtered = net_utils.filterEdges(edges, { minAbsEps: min_abs_eps, limit });
     debug(`get_NetRelation: ${sources.length} fuentes × ${stats.destinos_validos} destinos = ${stats.pares} pares, `
       + `${edges.length} guardadas, ${filtered.total} con |ε| ≥ ${min_abs_eps} (${tEdges - t0} ms)`);
