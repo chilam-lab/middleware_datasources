@@ -61,4 +61,10 @@ services:
     image: redis:7-alpine
     container_name: redis_middlewaredatasources
     restart: unless-stopped
+    # Solo es caché con expiración (análisis de Nicho 15 min, redes 1 h; una
+    # red grande puede ocupar decenas de MB). Tope de memoria: al llenarse se
+    # descartan primero las llaves con TTL más viejas (el front ya avisa
+    # "análisis expirado"). Sin snapshots RDB: no hace falta persistir y el
+    # fork de cada snapshot puede duplicar la memoria usada.
+    command: ["redis-server", "--maxmemory", "1gb", "--maxmemory-policy", "volatile-lru", "--save", ""]
 
