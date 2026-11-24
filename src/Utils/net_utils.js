@@ -151,10 +151,17 @@ function computeEdges(sources, targets, n, minOcc) {
   };
 }
 
-/** Aristas que pasan el filtro de |ε| (y signo), ya ordenadas por |ε| descendente. */
-function filterEdges(edges, { minAbsEps = 2, signo = 'ambos', limit = 20000, offset = 0 } = {}) {
-  const keep = edges.filter(e => Math.abs(e.epsilon) >= minAbsEps
-    && (signo === 'ambos' || (signo === 'positivo' ? e.epsilon > 0 : e.epsilon < 0)));
+/**
+ * Aristas que pasan el filtro de |ε| (y signo), ya ordenadas por |ε| descendente.
+ * Con epsDesde/epsHasta (una barra del histograma) se usan solo las de
+ * epsDesde ≤ ε < epsHasta, y el umbral y el signo se ignoran.
+ */
+function filterEdges(edges, { minAbsEps = 2, signo = 'ambos', limit = 20000, offset = 0, epsDesde = null, epsHasta = null } = {}) {
+  const byRange = Number.isFinite(epsDesde) && Number.isFinite(epsHasta);
+  const keep = byRange
+    ? edges.filter(e => e.epsilon >= epsDesde && e.epsilon < epsHasta)
+    : edges.filter(e => Math.abs(e.epsilon) >= minAbsEps
+      && (signo === 'ambos' || (signo === 'positivo' ? e.epsilon > 0 : e.epsilon < 0)));
   return { total: keep.length, edges: keep.slice(offset, offset + limit) };
 }
 

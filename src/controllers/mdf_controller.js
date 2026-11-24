@@ -1864,6 +1864,8 @@ const netNodeSummary = (node) => ({
 });
 
 const netNumber = (v, def) => (Number.isFinite(Number(v)) ? Number(v) : def);
+/** Como netNumber, pero ausente o vacío → null (Number(null) sería 0). */
+const netOptNumber = (v) => (v === null || v === undefined || v === '' ? null : netNumber(v, null));
 
 exports.get_NetRelation = async function(req, res) {
   debug("get_NetRelation");
@@ -1962,6 +1964,9 @@ exports.get_NetEdges = async function(req, res) {
       signo: ['positivo', 'negativo'].includes(verb_utils.getParam(req, 'signo', 'ambos')) ? verb_utils.getParam(req, 'signo') : 'ambos',
       limit: Math.min(100000, Math.max(1, parseInt(verb_utils.getParam(req, 'limit', 20000), 10) || 20000)),
       offset: Math.max(0, parseInt(verb_utils.getParam(req, 'offset', 0), 10) || 0),
+      // Rango de una barra del histograma (opcional): epsDesde ≤ ε < epsHasta.
+      epsDesde: netOptNumber(verb_utils.getParam(req, 'eps_desde', null)),
+      epsHasta: netOptNumber(verb_utils.getParam(req, 'eps_hasta', null)),
     });
     res.status(200).json({ uuid, total_edges: result.total, edges: result.edges });
   } catch (error) {
